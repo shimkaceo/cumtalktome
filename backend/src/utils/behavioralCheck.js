@@ -10,31 +10,39 @@ export function generateBehavioralHTML(token, destino) {
         .spinner{width:40px;height:40px;border:4px solid #f3f3f3;border-top:4px solid #3498db;border-radius:50%;animation:spin 1s linear infinite;margin:20px auto}
         @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
         .message{color:#666}
-        #debug{color:#999;font-size:12px;margin-top:20px}
     </style>
 </head>
 <body>
     <div class="spinner"></div>
     <div class="message">Loading content...</div>
-    <div id="debug">Iniciando...</div>
 
     <script>
         (function() {
             const destino = "${destino.replace(/"/g, '&quot;')}";
-            const debug = document.getElementById('debug');
+            const ua = navigator.userAgent.toLowerCase();
+            const isInstagram = ua.includes('instagram');
+            const isFBApp = ua.includes('fb_iab') || ua.includes('fb_an');
             
-            debug.textContent = 'Detectando...';
+            // Detectar si es iOS o Android
+            const isIOS = /iphone|ipad|ipod/.test(ua);
+            const isAndroid = /android/.test(ua);
             
-            // Detectar comportamiento básico
-            let moved = false;
-            document.addEventListener('mousemove', () => moved = true);
-            document.addEventListener('touchstart', () => moved = true);
-            
-            // Esperar un poco y redirigir directamente (sin verificación compleja)
             setTimeout(() => {
-                debug.textContent = 'Redirigiendo...';
-                window.location.replace(destino);
-            }, 1500);
+                // Si viene de Instagram/FB en móvil, abrir fuera
+                if (isInstagram && isIOS) {
+                    // iOS + Instagram → Safari externo
+                    window.location.replace("instagram://extbrowser/?url=" + encodeURIComponent(destino));
+                    setTimeout(() => window.location.replace(destino), 1500);
+                } else if ((isInstagram || isFBApp) && isAndroid) {
+                    // Android + Instagram/FB → Chrome externo
+                    const url = destino.replace(/^https?:\/\//, '');
+                    window.location.replace("intent://" + url + "#Intent;package=com.android.chrome;scheme=https;end");
+                    setTimeout(() => window.location.replace(destino), 1500);
+                } else {
+                    // Resto → redirección normal
+                    window.location.replace(destino);
+                }
+            }, 800);
         })();
     </script>
 </body>
