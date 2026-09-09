@@ -33,9 +33,10 @@ app.get('/:slug', async (request, response) => {
   const headers = request.headers;
   
   try {
-    const link = await prisma.link.findUnique({
+    // CORREGIDO: linkVariant (no link)
+    const link = await prisma.linkVariant.findUnique({
       where: { slug },
-      include: { user: true }
+      include: { influencer: true }
     });
     
     if (!link) return response.status(404).send('Link no encontrado');
@@ -64,7 +65,7 @@ app.get('/:slug', async (request, response) => {
         description: link.description,
         category: link.category || 'lifestyle',
         image: link.image,
-        author: link.user?.name || 'Content Creator'
+        author: link.influencer?.name || 'Content Creator'
       };
       const semanticHTML = generateSemanticHTML(linkData, userAgent);
       response.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -80,7 +81,7 @@ app.get('/:slug', async (request, response) => {
     
   } catch (error) {
     console.error('Error:', error);
-    response.status(500).send('Error interno');
+    response.status(500).send('Error interno: ' + error.message);
   }
 });
 
