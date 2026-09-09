@@ -15,8 +15,7 @@ const botUserAgents = [
   'facebookexternalhit','facebot','googlebot','bingbot','twitterbot',
   'linkedinbot','whatsapp','telegrambot','slackbot','discordbot',
   'applebot','yandexbot','baiduspider','rogerbot','embedly',
-  'quora link preview",
-  "reddit", "redditbot", "Redditbot'
+  'quora link preview', 'reddit', 'redditbot', 'Redditbot'
 ];
 
 function isBot(userAgent) {
@@ -148,19 +147,16 @@ app.post('/api/behavior-check', async (request, response) => {
     const body = await request.json();
     const { token, mouseMoved, hasScrolled, screenWidth, screenHeight } = body;
     
-    // Verificar token
     const isValid = await validateToken(token, request.ip);
     if (!isValid) {
       return response.status(403).json({ error: 'Token invalido' });
     }
     
-    // Analizar comportamiento
     const humanScore = (mouseMoved ? 1 : 0) + (hasScrolled ? 1 : 0) + (screenWidth > 0 ? 1 : 0);
     const isHuman = humanScore >= 2;
     
     console.log(`Behavior check: IP=${request.ip}, Score=${humanScore}, Human=${isHuman}`);
     
-    // Guardar en analytics
     await redis.lpush(`behavior:${request.ip}`, JSON.stringify({
       timestamp: new Date().toISOString(),
       mouseMoved,
