@@ -36,13 +36,16 @@ export function generateBehavioralHTML(token, destino) {
             const token = document.querySelector('meta[name="session-token"]').content;
             const destino = "${destino.replace(/"/g, '&quot;')}";
             
+            // Detectar si es móvil
+            const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+            
             // Métricas de comportamiento
             let mouseMoved = false;
             let hasScrolled = false;
             let keyPressed = false;
-            let timeOnPage = 0;
+            let touchDetected = false;
             
-            // Detectar movimiento de ratón
+            // Detectar movimiento de ratón (desktop)
             document.addEventListener('mousemove', () => { mouseMoved = true; });
             
             // Detectar scroll
@@ -51,28 +54,32 @@ export function generateBehavioralHTML(token, destino) {
             // Detectar teclado
             document.addEventListener('keydown', () => { keyPressed = true; });
             
-            // Verificar tamaño de pantalla (bots headless suelen tener 0x0 o valores raros)
-            const screenValid = window.screen.width > 0 && window.screen.height > 0 && window.innerWidth > 0;
+            // Detectar touch (móvil)
+            document.addEventListener('touchstart', () => { touchDetected = true; });
             
-            // Verificar después de 2.5 segundos
+            // Verificar tamaño de pantalla
+            const screenValid = window.screen.width > 0 && window.screen.height > 0;
+            
+            // Verificar después de 1 segundo (más rápido)
             setTimeout(() => {
-                timeOnPage = 2500;
-                
-                // Score de humanidad: necesita al menos 2 señales positivas
                 let humanScore = 0;
                 if (mouseMoved) humanScore++;
                 if (hasScrolled) humanScore++;
                 if (keyPressed) humanScore++;
                 if (screenValid) humanScore++;
+                if (touchDetected) humanScore += 2; // Bonus por touch
                 
-                console.log('Human score:', humanScore, {mouseMoved, hasScrolled, keyPressed, screenValid});
+                // En móvil, ser más permisivo
+                const requiredScore = isMobile ? 1 : 2;
                 
-                if (humanScore >= 2) {
+                console.log('Human score:', humanScore, 'Mobile:', isMobile, 'Required:', requiredScore);
+                
+                if (humanScore >= requiredScore) {
                     // Es humano - mostrar contenido
                     document.getElementById('loading').style.display = 'none';
                     document.getElementById('content').style.display = 'block';
                     
-                    // Notificar al servidor que pasó la prueba
+                    // Notificar al servidor
                     fetch('/api/behavior-check', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
@@ -80,17 +87,18 @@ export function generateBehavioralHTML(token, destino) {
                             token: token,
                             mouseMoved: mouseMoved,
                             hasScrolled: hasScrolled,
-                            screenWidth: window.screen.width,
-                            screenHeight: window.screen.height
+                            touchDetected: touchDetected,
+                            isMobile: isMobile,
+                            screenWidth: window.screen.width
                         })
                     });
                 } else {
-                    // Probable bot - mostrar error
+                    // Probable bot
                     document.querySelector('.spinner').style.display = 'none';
                     document.querySelector('.message').style.display = 'none';
                     document.getElementById('error').style.display = 'block';
                 }
-            }, 2500);
+            }, 1000); // 1 segundo en lugar de 2.5
         })();
     </script>
 </body>
