@@ -60,8 +60,8 @@ app.get('/:slug', async (request, response) => {
       console.log(`🤖 BOT DETECTADO - Mostrando contenido semántico: ${slug}`);
       const linkData = {
         slug: link.slug,
-        title: link.influencer?.nombre || 'Explorando Nuevas Perspectivas',
-        description: link.influencer?.categoria || 'Contenido exclusivo',
+        title: 'Explorando Nuevas Perspectivas',
+        description: 'Descubre técnicas avanzadas de fotografía artística y composición visual en este espacio dedicado a la creatividad y el arte visual.',
         category: link.influencer?.categoria?.toLowerCase() || 'lifestyle',
         image: '/assets/hero-1.jpg',
         author: link.influencer?.nombre || 'Content Creator'
