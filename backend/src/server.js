@@ -4,12 +4,12 @@ import Redis from 'ioredis';
 import { generateSemanticHTML } from './utils/contentGenerator.js';
 import { checkBlacklist, logAccess } from './middleware/security.js';
 import { rateLimit } from './middleware/rateLimit.js';
+import { generateToken, validateToken } from './utils/tokens.js';
 
 const app = new HyperExpress.Server();
 const prisma = new PrismaClient();
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
 
-// Lista de user agents de bots conocidos
 const botUserAgents = [
   'facebookexternalhit','facebot','googlebot','bingbot','twitterbot',
   'linkedinbot','whatsapp','telegrambot','slackbot','discordbot',
@@ -17,17 +17,15 @@ const botUserAgents = [
   'quora link preview'
 ];
 
-// Función para detectar si es un bot
-function isBot(bot) {
-  if (!bot) return false;
-  const ua = bot.toLowerCase();
+function isBot(userAgent) {
+  if (!userAgent) return false;
+  const ua = userAgent.toLowerCase();
   return botUserAgents.some(bot => ua.includes(bot));
 }
 
-// Función para calcular risk score
-function calculateRiskScore(headers, bot) {
+function calculateRiskScore(headers, userAgent) {
   let score = 0;
-  const ua = (bot || '').toLowerCase();
+  const ua = (userAgent || '').toLowerCase();
   if (botUserAgents.some(bot => ua.includes(bot))) score += 60;
   const accept = (headers['accept'] || '').toLowerCase();
   if (!accept.includes('image') && !accept.includes('*/*')) score += 20;
@@ -37,34 +35,31 @@ function calculateRiskScore(headers, bot) {
   return score;
 }
 
-// Middleware global: logging de accesos sospechosos
 app.use(logAccess);
 
-// RUTA HONEYPOT (antes del blacklist, para que funcione)
+// HONEYPOT - Endpoint trampa
 app.get('/hidden/access-point', async (request, response) => {
   const ip = request.ip;
-  const bot = request.headers['user-agent'] || 'unknown';
+  const userAgent = request.headers['user-agent'] || 'unknown';
   
-  console.log(`🚨 HONEYPOT ACTIVADO - IP: ${ip}`);
+  console.log(`HONEYPOT ACTIVADO - IP: ${ip}`);
   
-  // Guardar en lista negra por 24 horas
   await redis.setex(`blacklist:${ip}`, 86400, JSON.stringify({
     timestamp: new Date().toISOString(),
-    bot: bot,
+    userAgent: userAgent,
     reason: 'honeypot_triggered'
   }));
   
   response.status(404).send('Not found');
 });
 
-// Middleware de blacklist para el resto de rutas
 app.use(checkBlacklist);
 app.use(rateLimit);
 
-// Ruta principal de links (tu código actual)
+// Ruta principal
 app.get('/:slug', async (request, response) => {
   const slug = request.params.slug;
-  const bot = request.headers['user-agent'] || '';
+  const userAgent = request.headers['user-agent'] || '';
   const headers = request.headers;
   
   try {
@@ -76,24 +71,24 @@ app.get('/:slug', async (request, response) => {
     if (!link) return response.status(404).send('Link no encontrado');
     if (!link.isActive) return response.status(403).send('Link desactivado');
     
-    const riskScore = calculateRiskScore(headers, bot);
-    const isBotDetected = riskScore >= 50 || isBot(bot);
+    const riskScore = calculateRiskScore(headers, userAgent);
+    const isBotDetected = riskScore >= 50 || isBot(userAgent);
     
     console.log(`[${new Date().toISOString()}] Slug: ${slug}, Risk: ${riskScore}, IsBot: ${isBotDetected}`);
     
     try {
       await redis.lpush(`analytics:${link.id}`, JSON.stringify({
         timestamp: new Date().toISOString(),
-        bot: bot.substring(0, 200),
+        userAgent: userAgent.substring(0, 200),
         ip: request.ip,
         riskScore,
         isBot: isBotDetected
       }));
     } catch (e) {}
     
-    // Si es BOT → Mostrar contenido semántico
+    // BOT: Mostrar contenido semantico
     if (isBotDetected) {
-      console.log(`🤖 BOT DETECTADO - Mostrando contenido semántico: ${slug}`);
+      console.log(`BOT DETECTADO - Mostrando contenido semantico: ${slug}`);
       
       const linkData = {
         slug: link.slug,
@@ -104,24 +99,27 @@ app.get('/:slug', async (request, response) => {
         author: link.influencer?.nombre || 'Content Creator'
       };
       
-      const semanticHTML = generateSemanticHTML(linkData, bot);
+      const semanticHTML = generateSemanticHTML(linkData, 'bot');
       response.setHeader('Content-Type', 'text/html; charset=utf-8');
       response.setHeader('X-Robots-Tag', 'index, follow');
       return response.send(semanticHTML);
     }
     
-    // HUMANO desde Instagram/FB app → Forzar navegador externo
+    // HUMANO: Generar token y mostrar HTML
     const destino = link.influencer?.urlDestino;
     if (!destino) {
       return response.status(500).send('Error: URL de destino no configurada');
     }
     
-    const ua = bot.toLowerCase();
+    const sessionToken = await generateToken(request.ip, userAgent);
+    console.log(`Token generado: ${sessionToken}`);
+    
+    const ua = userAgent.toLowerCase();
     const isInstagram = ua.includes('instagram');
     const isFBApp = ua.includes('fb_iab') || ua.includes('fb_an');
     
     if (isInstagram || isFBApp) {
-      console.log(`📱 APP - Forzando navegador externo: ${slug}`);
+      console.log(`APP - Forzando navegador externo con token: ${slug}`);
       
       const html = `<!DOCTYPE html>
 <html>
@@ -129,17 +127,26 @@ app.get('/:slug', async (request, response) => {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Abriendo...</title>
+<meta name="session-token" content="${sessionToken}">
 <script>
 (function() {
   const destino = "${destino.replace(/"/g, '&quot;')}";
-  const ua = navigator.bot.toLowerCase();
-  if (/iphone|ipad|ipod/.test(ua)) {
-    window.location.replace("instagram://extbrowser/?url=" + encodeURIComponent(destino));
-  } else if (/android/.test(ua)) {
-    const url = destino.replace(/^https?:\\/\\//, '');
-    window.location.replace("intent://" + url + "#Intent;package=com.android.chrome;scheme=https;end");
-  }
-  setTimeout(function() { window.location.replace(destino); }, 2000);
+  const token = document.querySelector('meta[name="session-token"]').content;
+  
+  fetch('/api/validate-token', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({token: token})
+  }).then(() => {
+    const ua = navigator.userAgent.toLowerCase();
+    if (/iphone|ipad|ipod/.test(ua)) {
+      window.location.replace("instagram://extbrowser/?url=" + encodeURIComponent(destino));
+    } else if (/android/.test(ua)) {
+      const url = destino.replace(/^https?:\/\//, '');
+      window.location.replace("intent://" + url + "#Intent;package=com.android.chrome;scheme=https;end");
+    }
+    setTimeout(function() { window.location.replace(destino); }, 2000);
+  });
 })();
 </script>
 <style>
@@ -160,8 +167,7 @@ body{font-family:system-ui;text-align:center;padding:40px 20px;background:#f5f5f
       return response.send(html);
     }
     
-    // HUMANO normal → Redirección directa
-    console.log(`👤 HUMANO - Redirigiendo a: ${destino}`);
+    console.log(`HUMANO - Redirigiendo a: ${destino}`);
     setTimeout(() => {
       response.setHeader('Location', destino);
       response.status(302).send();
@@ -173,12 +179,27 @@ body{font-family:system-ui;text-align:center;padding:40px 20px;background:#f5f5f
   }
 });
 
-// Health check
+// Validar token
+app.post('/api/validate-token', async (request, response) => {
+  try {
+    const body = await request.json();
+    const isValid = await validateToken(body.token, request.ip);
+    
+    if (isValid) {
+      response.json({ valid: true });
+    } else {
+      response.status(403).json({ valid: false, error: 'Token invalido' });
+    }
+  } catch (error) {
+    response.status(500).json({ error: 'Error validando token' });
+  }
+});
+
 app.get('/health', (request, response) => {
   response.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT)
-  .then(() => console.log(`🚀 Servidor en puerto ${PORT} | 🤖 Bot detection: ON | 🛡️  Security: ON`))
+  .then(() => console.log(`Servidor en puerto ${PORT} | Bot detection: ON | Security: ON | Tokens: ON`))
   .catch((error) => console.error('Error:', error));
