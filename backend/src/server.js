@@ -1,7 +1,7 @@
-const HyperExpress = require('hyper-express');
-const { PrismaClient } = require('@prisma/client');
-const Redis = require('ioredis');
-const { generateSemanticHTML } = require('./utils/contentGenerator');
+import HyperExpress from 'hyper-express';
+import { PrismaClient } from '@prisma/client';
+import Redis from 'ioredis';
+import { generateSemanticHTML } from './utils/contentGenerator.js';
 
 const app = new HyperExpress.Server();
 const prisma = new PrismaClient();
