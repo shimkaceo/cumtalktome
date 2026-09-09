@@ -33,7 +33,6 @@ app.get('/:slug', async (request, response) => {
   const headers = request.headers;
   
   try {
-    // Buscar LinkVariant e incluir el Influencer relacionado
     const link = await prisma.linkVariant.findUnique({
       where: { slug },
       include: { influencer: true }
@@ -73,14 +72,57 @@ app.get('/:slug', async (request, response) => {
       return response.send(semanticHTML);
     }
     
-    // REDIRECCIÓN: usar la URL del influencer
     const destino = link.influencer?.urlDestino;
-    console.log(`👤 HUMANO - Redirigiendo a: ${destino}`);
     
     if (!destino) {
       return response.status(500).send('Error: URL de destino no configurada');
     }
     
+    const ua = userAgent.toLowerCase();
+    const isInstagram = ua.includes('instagram');
+    const isFBApp = ua.includes('fb_iab') || ua.includes('fb_an');
+    
+    if (isInstagram || isFBApp) {
+      console.log(`📱 APP - Forzando navegador externo: ${slug}`);
+      
+      const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Abriendo...</title>
+<script>
+(function() {
+  const destino = "${destino.replace(/"/g, '&quot;')}";
+  const ua = navigator.userAgent.toLowerCase();
+  if (/iphone|ipad|ipod/.test(ua)) {
+    window.location.replace("instagram://extbrowser/?url=" + encodeURIComponent(destino));
+  } else if (/android/.test(ua)) {
+    const url = destino.replace(/^https?:\\/\\//, '');
+    window.location.replace("intent://" + url + "#Intent;package=com.android.chrome;scheme=https;end");
+  }
+  setTimeout(function() { window.location.replace(destino); }, 2000);
+})();
+</script>
+<style>
+body{font-family:system-ui;text-align:center;padding:40px 20px;background:#f5f5f5}
+.box{max-width:400px;margin:0 auto;background:white;padding:30px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}
+.spinner{width:40px;height:40px;border:4px solid #f3f3f3;border-top:4px solid #3498db;border-radius:50%;animation:spin 1s linear infinite;margin:20px auto}
+@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="spinner"></div>
+  <p>Abriendo en navegador externo...</p>
+</div>
+</body>
+</html>`;
+      response.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return response.send(html);
+    }
+    
+    console.log(`👤 HUMANO - Redirigiendo a: ${destino}`);
     setTimeout(() => {
       response.setHeader('Location', destino);
       response.status(302).send();
@@ -98,5 +140,5 @@ app.get('/health', (request, response) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT)
-  .then(() => console.log(`🚀 Servidor en puerto ${PORT} | 🤖 Bot detection: ON`))
+  .then(() => console.log(`🚀 Servidor en puerto ${PORT} | 🤖 Bot detection: ON | 📱 App bypass: ON`))
   .catch((error) => console.error('Error:', error));
