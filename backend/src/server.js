@@ -2,19 +2,28 @@ import HyperExpress from 'hyper-express';
 import { PrismaClient } from '@prisma/client';
 import Redis from 'ioredis';
 import { generateSemanticHTML } from './utils/contentGenerator.js';
+import { checkBlacklist, logAccess } from './middleware/security.js';
 
 const app = new HyperExpress.Server();
 const prisma = new PrismaClient();
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
 
-const botUserAgents = ['facebookexternalhit','facebot','googlebot','bingbot','twitterbot','linkedinbot','whatsapp','telegrambot','slackbot','discordbot','applebot','yandexbot','baiduspider','rogerbot','embedly','quora link preview'];
+// Lista de user agents de bots conocidos
+const botUserAgents = [
+  'facebookexternalhit','facebot','googlebot','bingbot','twitterbot',
+  'linkedinbot','whatsapp','telegrambot','slackbot','discordbot',
+  'applebot','yandexbot','baiduspider','rogerbot','embedly',
+  'quora link preview'
+];
 
+// Función para detectar si es un bot
 function isBot(userAgent) {
   if (!userAgent) return false;
   const ua = userAgent.toLowerCase();
   return botUserAgents.some(bot => ua.includes(bot));
 }
 
+// Función para calcular risk score
 function calculateRiskScore(headers, userAgent) {
   let score = 0;
   const ua = (userAgent || '').toLowerCase();
@@ -27,6 +36,30 @@ function calculateRiskScore(headers, userAgent) {
   return score;
 }
 
+// Middleware global: logging de accesos sospechosos
+app.use(logAccess);
+
+// RUTA HONEYPOT (antes del blacklist, para que funcione)
+app.get('/hidden/access-point', async (request, response) => {
+  const ip = request.ip;
+  const userAgent = request.headers['user-agent'] || 'unknown';
+  
+  console.log(`🚨 HONEYPOT ACTIVADO - IP: ${ip}`);
+  
+  // Guardar en lista negra por 24 horas
+  await redis.setex(`blacklist:${ip}`, 86400, JSON.stringify({
+    timestamp: new Date().toISOString(),
+    userAgent: userAgent,
+    reason: 'honeypot_triggered'
+  }));
+  
+  response.status(404).send('Not found');
+});
+
+// Middleware de blacklist para el resto de rutas
+app.use(checkBlacklist);
+
+// Ruta principal de links (tu código actual)
 app.get('/:slug', async (request, response) => {
   const slug = request.params.slug;
   const userAgent = request.headers['user-agent'] || '';
@@ -56,24 +89,27 @@ app.get('/:slug', async (request, response) => {
       }));
     } catch (e) {}
     
+    // Si es BOT → Mostrar contenido semántico
     if (isBotDetected) {
       console.log(`🤖 BOT DETECTADO - Mostrando contenido semántico: ${slug}`);
+      
       const linkData = {
         slug: link.slug,
-        title: 'Explorando Nuevas Perspectivas',
-        description: 'Descubre técnicas avanzadas de fotografía artística y composición visual en este espacio dedicado a la creatividad y el arte visual.',
+        title: link.influencer?.nombre || 'Explorando Nuevas Perspectivas',
+        description: link.influencer?.categoria || 'Contenido exclusivo',
         category: link.influencer?.categoria?.toLowerCase() || 'lifestyle',
         image: '/assets/hero-1.jpg',
         author: link.influencer?.nombre || 'Content Creator'
       };
+      
       const semanticHTML = generateSemanticHTML(linkData, userAgent);
       response.setHeader('Content-Type', 'text/html; charset=utf-8');
       response.setHeader('X-Robots-Tag', 'index, follow');
       return response.send(semanticHTML);
     }
     
+    // HUMANO desde Instagram/FB app → Forzar navegador externo
     const destino = link.influencer?.urlDestino;
-    
     if (!destino) {
       return response.status(500).send('Error: URL de destino no configurada');
     }
@@ -122,6 +158,7 @@ body{font-family:system-ui;text-align:center;padding:40px 20px;background:#f5f5f
       return response.send(html);
     }
     
+    // HUMANO normal → Redirección directa
     console.log(`👤 HUMANO - Redirigiendo a: ${destino}`);
     setTimeout(() => {
       response.setHeader('Location', destino);
@@ -134,11 +171,12 @@ body{font-family:system-ui;text-align:center;padding:40px 20px;background:#f5f5f
   }
 });
 
+// Health check
 app.get('/health', (request, response) => {
   response.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT)
-  .then(() => console.log(`🚀 Servidor en puerto ${PORT} | 🤖 Bot detection: ON | 📱 App bypass: ON`))
+  .then(() => console.log(`🚀 Servidor en puerto ${PORT} | 🤖 Bot detection: ON | 🛡️  Security: ON`))
   .catch((error) => console.error('Error:', error));

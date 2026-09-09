@@ -1,23 +1,23 @@
 const contentTemplates = {
   photography: {
-    titles: ["Explorando Nuevas Perspectivas","Arte Visual Contemporáneo","Capturando Momentos Únicos","Fotografía Artística","Visiones Creativas"],
-    descriptions: ["Descubre técnicas avanzadas de fotografía artística y composición visual.","Explorando los límites de la expresión creativa a través de la lente.","Un vistazo al mundo de la fotografía contemporánea y sus técnicas."],
-    images: ["/assets/hero-1.jpg","/assets/gallery-1.jpg","/assets/portfolio-1.jpg"]
+    titles: ["Explorando Nuevas Perspectivas","Arte Visual Contemporáneo","Capturando Momentos Únicos"],
+    descriptions: ["Descubre técnicas avanzadas de fotografía artística"],
+    images: ["/assets/hero-1.jpg"]
   },
   fitness: {
-    titles: ["Transformación Total","Rutinas de Élite","Nutrición y Bienestar","Fitness Avanzado","Entrenamiento Personalizado"],
-    descriptions: ["Descubre rutinas de entrenamiento personalizadas y consejos de nutrición.","Transforma tu cuerpo con técnicas probadas de fitness y bienestar.","Guía completa de entrenamiento, nutrición y estilo de vida saludable."],
-    images: ["/assets/fitness-1.jpg","/assets/workout-1.jpg","/assets/health-1.jpg"]
+    titles: ["Transformación Total","Rutinas de Élite"],
+    descriptions: ["Descubre rutinas de entrenamiento"],
+    images: ["/assets/fitness-1.jpg"]
   },
   lifestyle: {
-    titles: ["Estilo de Vida Moderno","Inspiración Diaria","Bienestar y Estilo","Vida Creativa","Momentos Especiales"],
-    descriptions: ["Inspiración para una vida plena, creativa y con propósito.","Descubre consejos de estilo de vida, bienestar y crecimiento personal.","Un espacio dedicado a compartir experiencias, ideas y momentos especiales."],
-    images: ["/assets/lifestyle-1.jpg","/assets/moment-1.jpg","/assets/experience-1.jpg"]
+    titles: ["Estilo de Vida Moderno","Inspiración Diaria"],
+    descriptions: ["Inspiración para una vida plena"],
+    images: ["/assets/lifestyle-1.jpg"]
   },
   fashion: {
-    titles: ["Moda y Estilo","Tendencias Únicas","Estilo Personal","Fashion Forward","Looks Inspiradores"],
-    descriptions: ["Descubre las últimas tendencias y crea tu estilo único.","Inspiración de moda, consejos de estilo y looks destacados.","Explorando el mundo de la moda contemporánea y el estilo personal."],
-    images: ["/assets/fashion-1.jpg","/assets/style-1.jpg","/assets/trend-1.jpg"]
+    titles: ["Moda y Estilo","Tendencias Únicas"],
+    descriptions: ["Descubre las últimas tendencias"],
+    images: ["/assets/fashion-1.jpg"]
   }
 };
 
@@ -33,7 +33,13 @@ export function generateSemanticHTML(linkData, userAgent) {
   const image = linkData.image || getRandomElement(template.images);
   const currentUrl = `https://cumtalkto.me/${linkData.slug}`;
   
-  return `<!DOCTYPE html>
+  const honeypotLinks = `
+    <a href="/hidden/access-point" style="position:absolute;left:-9999px;top:-9999px;" tabindex="-1" aria-hidden="true"> </a>
+    <a href="/hidden/access-point?t=offscreen" style="display:none;" tabindex="-1"> </a>
+    <link rel="alternate" href="/hidden/access-point?t=hidden" type="text/xml" title="RSS" />
+  `;
+  
+  const html = `<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -67,14 +73,23 @@ export function generateSemanticHTML(linkData, userAgent) {
     </style>
 </head>
 <body>
+    ${honeypotLinks}
     <article>
         <h1>${title}</h1>
-        <div class="meta">Publicado el ${new Date().toLocaleDateString('es-ES')} por ${linkData.author || 'Content Creator'}</div>
-        <div class="image-container"><img src="${image}" alt="${title}"></div>
+        <div class="meta">
+            Publicado el ${new Date().toLocaleDateString('es-ES')} 
+            por ${linkData.author || 'Content Creator'}
+        </div>
+        <div class="image-container">
+            <img src="${image}" alt="${title}">
+        </div>
         <div class="content">
             <p>${description}</p>
-            <p>Bienvenidos a este espacio dedicado a la exploración creativa y el compartir momentos únicos. Aquí encontrarás contenido inspirador, ideas frescas y una visión única sobre ${category}.</p>
-            <p>Mi objetivo es crear una comunidad donde podamos aprender juntos, compartir experiencias y descubrir nuevas perspectivas. Cada publicación está pensada para aportar valor e inspiración a tu día a día.</p>
+            <p>Bienvenidos a este espacio dedicado a la exploración creativa y el compartir momentos únicos. 
+            Aquí encontrarás contenido inspirador, ideas frescas y una visión única sobre ${category}.</p>
+            <p>Mi objetivo es crear una comunidad donde podamos aprender juntos, compartir experiencias 
+            y descubrir nuevas perspectivas. Cada publicación está pensada para aportar valor e inspiración 
+            a tu día a día.</p>
             <p>Gracias por ser parte de esta comunidad. Tu apoyo y participación hacen que todo esto sea posible.</p>
         </div>
         <div class="tags">
@@ -86,4 +101,6 @@ export function generateSemanticHTML(linkData, userAgent) {
     </article>
 </body>
 </html>`;
+
+  return html;
 }

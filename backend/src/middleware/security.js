@@ -1,22 +1,41 @@
-export function securityHeaders(req, res, next) {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+import Redis from 'ioredis';
+
+const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+
+// Middleware: Verificar si IP está en lista negra
+export async function checkBlacklist(request, response, next) {
+  const ip = request.ip;
   
-  res.setHeader('Content-Security-Policy', 
-    "default-src 'self'; " +
-    "script-src 'self' 'unsafe-inline'; " +
-    "style-src 'self' 'unsafe-inline'; " +
-    "img-src 'self' https: data:; " +
-    "font-src 'self'; " +
-    "connect-src 'self';"
-  );
+  try {
+    const isBlacklisted = await redis.exists(`blacklist:${ip}`);
+    
+    if (isBlacklisted) {
+      console.log(`🚫 IP BLOQUEADA: ${ip}`);
+      return response.status(403).send('Acceso temporalmente restringido');
+    }
+    
+    // IP limpia, continuar
+    next();
+  } catch (error) {
+    console.error('Error checking blacklist:', error);
+    // En caso de error, permitir acceso (fail open)
+    next();
+  }
+}
+
+// Middleware: Registrar acceso sospechoso (para análisis posterior)
+export async function logAccess(request, response, next) {
+  const ip = request.ip;
+  const userAgent = request.headers['user-agent'] || 'unknown';
+  const path = request.path;
   
-  if (process.env.NODE_ENV === 'production') {
-    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  // Solo logear ciertos patrones sospechosos
+  const suspiciousPatterns = ['/api/', '/admin/', '/.env', '/config'];
+  const isSuspicious = suspiciousPatterns.some(p => path.includes(p));
+  
+  if (isSuspicious) {
+    console.log(`⚠️  Acceso sospechoso: ${ip} → ${path}`);
   }
   
-  return next();
+  next();
 }
