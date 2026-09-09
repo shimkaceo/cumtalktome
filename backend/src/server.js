@@ -15,7 +15,8 @@ const botUserAgents = [
   'facebookexternalhit','facebot','googlebot','bingbot','twitterbot',
   'linkedinbot','whatsapp','telegrambot','slackbot','discordbot',
   'applebot','yandexbot','baiduspider','rogerbot','embedly',
-  'quora link preview'
+  'quora link preview",
+  "reddit", "redditbot", "Redditbot'
 ];
 
 function isBot(userAgent) {
