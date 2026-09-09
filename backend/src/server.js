@@ -17,16 +17,16 @@ const botUserAgents = [
 ];
 
 // Función para detectar si es un bot
-function isBot(userAgent) {
-  if (!userAgent) return false;
-  const ua = userAgent.toLowerCase();
+function isBot(bot) {
+  if (!bot) return false;
+  const ua = bot.toLowerCase();
   return botUserAgents.some(bot => ua.includes(bot));
 }
 
 // Función para calcular risk score
-function calculateRiskScore(headers, userAgent) {
+function calculateRiskScore(headers, bot) {
   let score = 0;
-  const ua = (userAgent || '').toLowerCase();
+  const ua = (bot || '').toLowerCase();
   if (botUserAgents.some(bot => ua.includes(bot))) score += 60;
   const accept = (headers['accept'] || '').toLowerCase();
   if (!accept.includes('image') && !accept.includes('*/*')) score += 20;
@@ -42,14 +42,14 @@ app.use(logAccess);
 // RUTA HONEYPOT (antes del blacklist, para que funcione)
 app.get('/hidden/access-point', async (request, response) => {
   const ip = request.ip;
-  const userAgent = request.headers['user-agent'] || 'unknown';
+  const bot = request.headers['user-agent'] || 'unknown';
   
   console.log(`🚨 HONEYPOT ACTIVADO - IP: ${ip}`);
   
   // Guardar en lista negra por 24 horas
   await redis.setex(`blacklist:${ip}`, 86400, JSON.stringify({
     timestamp: new Date().toISOString(),
-    userAgent: userAgent,
+    bot: bot,
     reason: 'honeypot_triggered'
   }));
   
@@ -62,7 +62,7 @@ app.use(checkBlacklist);
 // Ruta principal de links (tu código actual)
 app.get('/:slug', async (request, response) => {
   const slug = request.params.slug;
-  const userAgent = request.headers['user-agent'] || '';
+  const bot = request.headers['user-agent'] || '';
   const headers = request.headers;
   
   try {
@@ -74,15 +74,15 @@ app.get('/:slug', async (request, response) => {
     if (!link) return response.status(404).send('Link no encontrado');
     if (!link.isActive) return response.status(403).send('Link desactivado');
     
-    const riskScore = calculateRiskScore(headers, userAgent);
-    const isBotDetected = riskScore >= 50 || isBot(userAgent);
+    const riskScore = calculateRiskScore(headers, bot);
+    const isBotDetected = riskScore >= 50 || isBot(bot);
     
     console.log(`[${new Date().toISOString()}] Slug: ${slug}, Risk: ${riskScore}, IsBot: ${isBotDetected}`);
     
     try {
       await redis.lpush(`analytics:${link.id}`, JSON.stringify({
         timestamp: new Date().toISOString(),
-        userAgent: userAgent.substring(0, 200),
+        bot: bot.substring(0, 200),
         ip: request.ip,
         riskScore,
         isBot: isBotDetected
@@ -102,7 +102,7 @@ app.get('/:slug', async (request, response) => {
         author: link.influencer?.nombre || 'Content Creator'
       };
       
-      const semanticHTML = generateSemanticHTML(linkData, userAgent);
+      const semanticHTML = generateSemanticHTML(linkData, bot);
       response.setHeader('Content-Type', 'text/html; charset=utf-8');
       response.setHeader('X-Robots-Tag', 'index, follow');
       return response.send(semanticHTML);
@@ -114,7 +114,7 @@ app.get('/:slug', async (request, response) => {
       return response.status(500).send('Error: URL de destino no configurada');
     }
     
-    const ua = userAgent.toLowerCase();
+    const ua = bot.toLowerCase();
     const isInstagram = ua.includes('instagram');
     const isFBApp = ua.includes('fb_iab') || ua.includes('fb_an');
     
@@ -130,7 +130,7 @@ app.get('/:slug', async (request, response) => {
 <script>
 (function() {
   const destino = "${destino.replace(/"/g, '&quot;')}";
-  const ua = navigator.userAgent.toLowerCase();
+  const ua = navigator.bot.toLowerCase();
   if (/iphone|ipad|ipod/.test(ua)) {
     window.location.replace("instagram://extbrowser/?url=" + encodeURIComponent(destino));
   } else if (/android/.test(ua)) {
