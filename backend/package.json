@@ -1,0 +1,37 @@
+{
+  "name": "biolink-backend",
+  "version": "1.0.0",
+  "description": "Bio Link Management Platform - Ultra-low latency backend",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "db:seed": "node prisma/seed.js"
+  },
+  "dependencies": {
+    "hyper-express": "^6.14.12",
+    "prisma": "^5.10.0",
+    "@prisma/client": "^5.10.0",
+    "ioredis": "^5.3.2",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "nanoid": "^5.0.6",
+    "node-cron": "^3.0.3",
+    "dotenv": "^16.4.5",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "useragent": "^2.3.0",
+    "geoip-lite": "^1.4.10",
+    "tls-inspector": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

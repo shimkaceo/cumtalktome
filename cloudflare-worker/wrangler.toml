@@ -1,0 +1,10 @@
+name = "biolink-edge-worker"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[env.production]
+vars = { BACKEND_URL = "https://tu-app.railway.app" }
+
+[[env.production.kv_namespaces]]
+binding = "ANALYTICS_KV"
+id = "tu-kv-namespace-id"

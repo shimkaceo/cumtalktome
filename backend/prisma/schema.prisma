@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Influencer {
+  id            String         @id @default(uuid())
+  nombre        String
+  urlDestino    String
+  categoria     Categoria
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  linkVariants  LinkVariant[]
+  analytics     AccessLog[]
+  
+  @@index([nombre])
+  @@index([categoria])
+}
+
+model LinkVariant {
+  id            String         @id @default(uuid())
+  influencerId  String
+  slug          String         @unique
+  clickCount    Int            @default(0)
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  
+  influencer    Influencer     @relation(fields: [influencerId], references: [id], onDelete: Cascade)
+  accessLogs    AccessLog[]
+  
+  @@index([slug])
+  @@index([influencerId])
+}
+
+model AccessLog {
+  id            String         @id @default(uuid())
+  variantId     String
+  influencerId  String?
+  ipAddress     String
+  country       String?
+  userAgent     String?
+  ja3Hash       String?
+  deviceType    String?
+  referrer      String?
+  timestamp     DateTime       @default(now())
+  isBot         Boolean        @default(false)
+  riskScore     Int            @default(0)
+  
+  variant       LinkVariant    @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  influencer    Influencer?    @relation(fields: [influencerId], references: [id])
+  
+  @@index([variantId])
+  @@index([ipAddress])
+  @@index([timestamp])
+  @@index([isBot])
+}
+
+enum Categoria {
+  FOTOGRAFIA
+  ARTE
+  LIFESTYLE
+  MODA
+  FITNESS
+  MUSICA
+  OTROS
+}
+
+model AdminUser {
+  id            String         @id @default(uuid())
+  username      String         @unique
+  password      String
+  createdAt     DateTime       @default(now())
+  lastLogin     DateTime?
+}
