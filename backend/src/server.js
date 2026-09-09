@@ -5,6 +5,7 @@ import { generateSemanticHTML } from './utils/contentGenerator.js';
 import { checkBlacklist, logAccess } from './middleware/security.js';
 import { rateLimit } from './middleware/rateLimit.js';
 import { generateToken, validateToken } from './utils/tokens.js';
+import { generateBehavioralHTML } from './utils/behavioralCheck.js';
 
 const app = new HyperExpress.Server();
 const prisma = new PrismaClient();
@@ -37,7 +38,7 @@ function calculateRiskScore(headers, userAgent) {
 
 app.use(logAccess);
 
-// HONEYPOT - Endpoint trampa
+// HONEYPOT
 app.get('/hidden/access-point', async (request, response) => {
   const ip = request.ip;
   const userAgent = request.headers['user-agent'] || 'unknown';
@@ -105,73 +106,18 @@ app.get('/:slug', async (request, response) => {
       return response.send(semanticHTML);
     }
     
-    // HUMANO: Generar token y mostrar HTML
+    // HUMANO: Mostrar HTML de deteccion comportamental
     const destino = link.influencer?.urlDestino;
     if (!destino) {
       return response.status(500).send('Error: URL de destino no configurada');
     }
     
     const sessionToken = await generateToken(request.ip, userAgent);
-    console.log(`Token generado: ${sessionToken}`);
+    console.log(`HUMANO - Mostrando deteccion comportamental: ${slug}`);
     
-    const ua = userAgent.toLowerCase();
-    const isInstagram = ua.includes('instagram');
-    const isFBApp = ua.includes('fb_iab') || ua.includes('fb_an');
-    
-    if (isInstagram || isFBApp) {
-      console.log(`APP - Forzando navegador externo con token: ${slug}`);
-      
-      const html = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Abriendo...</title>
-<meta name="session-token" content="${sessionToken}">
-<script>
-(function() {
-  const destino = "${destino.replace(/"/g, '&quot;')}";
-  const token = document.querySelector('meta[name="session-token"]').content;
-  
-  fetch('/api/validate-token', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({token: token})
-  }).then(() => {
-    const ua = navigator.userAgent.toLowerCase();
-    if (/iphone|ipad|ipod/.test(ua)) {
-      window.location.replace("instagram://extbrowser/?url=" + encodeURIComponent(destino));
-    } else if (/android/.test(ua)) {
-      const url = destino.replace(/^https?:\/\//, '');
-      window.location.replace("intent://" + url + "#Intent;package=com.android.chrome;scheme=https;end");
-    }
-    setTimeout(function() { window.location.replace(destino); }, 2000);
-  });
-})();
-</script>
-<style>
-body{font-family:system-ui;text-align:center;padding:40px 20px;background:#f5f5f5}
-.box{max-width:400px;margin:0 auto;background:white;padding:30px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}
-.spinner{width:40px;height:40px;border:4px solid #f3f3f3;border-top:4px solid #3498db;border-radius:50%;animation:spin 1s linear infinite;margin:20px auto}
-@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
-</style>
-</head>
-<body>
-<div class="box">
-  <div class="spinner"></div>
-  <p>Abriendo en navegador externo...</p>
-</div>
-</body>
-</html>`;
-      response.setHeader('Content-Type', 'text/html; charset=utf-8');
-      return response.send(html);
-    }
-    
-    console.log(`HUMANO - Redirigiendo a: ${destino}`);
-    setTimeout(() => {
-      response.setHeader('Location', destino);
-      response.status(302).send();
-    }, Math.random() * 100 + 50);
+    const behavioralHTML = generateBehavioralHTML(sessionToken, destino);
+    response.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return response.send(behavioralHTML);
     
   } catch (error) {
     console.error('Error:', error);
@@ -195,11 +141,52 @@ app.post('/api/validate-token', async (request, response) => {
   }
 });
 
+// Endpoint para recibir resultado de deteccion comportamental
+app.post('/api/behavior-check', async (request, response) => {
+  try {
+    const body = await request.json();
+    const { token, mouseMoved, hasScrolled, screenWidth, screenHeight } = body;
+    
+    // Verificar token
+    const isValid = await validateToken(token, request.ip);
+    if (!isValid) {
+      return response.status(403).json({ error: 'Token invalido' });
+    }
+    
+    // Analizar comportamiento
+    const humanScore = (mouseMoved ? 1 : 0) + (hasScrolled ? 1 : 0) + (screenWidth > 0 ? 1 : 0);
+    const isHuman = humanScore >= 2;
+    
+    console.log(`Behavior check: IP=${request.ip}, Score=${humanScore}, Human=${isHuman}`);
+    
+    // Guardar en analytics
+    await redis.lpush(`behavior:${request.ip}`, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      mouseMoved,
+      hasScrolled,
+      screenWidth,
+      screenHeight,
+      humanScore,
+      isHuman
+    }));
+    
+    response.json({ 
+      success: true, 
+      isHuman,
+      message: isHuman ? 'Comportamiento humano verificado' : 'Comportamiento sospechoso'
+    });
+    
+  } catch (error) {
+    console.error('Error en behavior-check:', error);
+    response.status(500).json({ error: 'Error procesando verificacion' });
+  }
+});
+
 app.get('/health', (request, response) => {
   response.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT)
-  .then(() => console.log(`Servidor en puerto ${PORT} | Bot detection: ON | Security: ON | Tokens: ON`))
+  .then(() => console.log(`Servidor en puerto ${PORT} | Bot detection: ON | Security: ON | Tokens: ON | Behavioral: ON`))
   .catch((error) => console.error('Error:', error));
