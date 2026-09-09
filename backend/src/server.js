@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import Redis from 'ioredis';
 import { generateSemanticHTML } from './utils/contentGenerator.js';
 import { checkBlacklist, logAccess } from './middleware/security.js';
+import { rateLimit } from './middleware/rateLimit.js';
 
 const app = new HyperExpress.Server();
 const prisma = new PrismaClient();
@@ -58,6 +59,7 @@ app.get('/hidden/access-point', async (request, response) => {
 
 // Middleware de blacklist para el resto de rutas
 app.use(checkBlacklist);
+app.use(rateLimit);
 
 // Ruta principal de links (tu código actual)
 app.get('/:slug', async (request, response) => {

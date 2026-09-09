@@ -1,29 +1,25 @@
-export function rateLimit(redis) {
-  return async (req, res, next) => {
-    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
-    const key = `ratelimit:${ip}`;
-    
-    try {
-      const current = await redis.incr(key);
-      
-      if (current === 1) {
-        await redis.expire(key, 60);
-      }
-      
-      if (current > 100) {
-        return res.status(429).json({ 
-          error: 'Too many requests',
-          retryAfter: await redis.ttl(key)
-        });
-      }
-      
-      res.setHeader('X-RateLimit-Limit', '100');
-      res.setHeader('X-RateLimit-Remaining', Math.max(0, 100 - current));
-      
-      return next();
-      
-    } catch (error) {
-      return next();
+import Redis from 'ioredis';
+
+const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+const WINDOW_MS = 60000; // 1 minuto
+const MAX_REQUESTS = 10; // máximo 10 requests por minuto
+
+export function rateLimit(request, response, next) {
+  const ip = request.ip;
+  const key = `ratelimit:${ip}`;
+  
+  redis.get(key).then((current) => {
+    if (current && parseInt(current) >= MAX_REQUESTS) {
+      console.log(`⛔ RATE LIMIT: ${ip} bloqueado`);
+      return response.status(429).send('Demasiadas peticiones');
     }
-  };
+    
+    // Incrementar contador
+    redis.multi()
+      .incr(key)
+      .expire(key, WINDOW_MS / 1000)
+      .exec()
+      .then(() => next())
+      .catch(() => next());
+  }).catch(() => next());
 }
