@@ -33,7 +33,7 @@ app.get('/:slug', async (request, response) => {
   const headers = request.headers;
   
   try {
-    // CORREGIDO: linkVariant (no link)
+    // Buscar LinkVariant e incluir el Influencer relacionado
     const link = await prisma.linkVariant.findUnique({
       where: { slug },
       include: { influencer: true }
@@ -61,11 +61,11 @@ app.get('/:slug', async (request, response) => {
       console.log(`🤖 BOT DETECTADO - Mostrando contenido semántico: ${slug}`);
       const linkData = {
         slug: link.slug,
-        title: link.title,
-        description: link.description,
-        category: link.category || 'lifestyle',
-        image: link.image,
-        author: link.influencer?.name || 'Content Creator'
+        title: link.influencer?.nombre || 'Explorando Nuevas Perspectivas',
+        description: link.influencer?.categoria || 'Contenido exclusivo',
+        category: link.influencer?.categoria?.toLowerCase() || 'lifestyle',
+        image: '/assets/hero-1.jpg',
+        author: link.influencer?.nombre || 'Content Creator'
       };
       const semanticHTML = generateSemanticHTML(linkData, userAgent);
       response.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -73,9 +73,16 @@ app.get('/:slug', async (request, response) => {
       return response.send(semanticHTML);
     }
     
-    console.log(`👤 HUMANO - Redirigiendo a: ${link.targetUrl}`);
+    // REDIRECCIÓN: usar la URL del influencer
+    const destino = link.influencer?.urlDestino;
+    console.log(`👤 HUMANO - Redirigiendo a: ${destino}`);
+    
+    if (!destino) {
+      return response.status(500).send('Error: URL de destino no configurada');
+    }
+    
     setTimeout(() => {
-      response.setHeader('Location', link.targetUrl || 'https://onlyfans.com');
+      response.setHeader('Location', destino);
       response.status(302).send();
     }, Math.random() * 100 + 50);
     
