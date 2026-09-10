@@ -7,7 +7,14 @@ import { rateLimit } from './middleware/rateLimit.js';
 import { generateToken, validateToken } from './utils/tokens.js';
 import { generateBehavioralHTML } from './utils/behavioralCheck.js';
 
-const app = new HyperExpress.Server();
+// Railway termina el TLS/HTTP delante de la app: el IP del socket siempre es
+// un proxy interno (100.64.0.x) y cambia entre peticiones. Sin trust_proxy,
+// request.ip rompe la validacion de tokens, comparte buckets de rate-limit
+// entre usuarios distintos, banea a cualquiera tras un proxy en el honeypot
+// y ensucia el AccessLog. Con el, se usa el IP real del visitante que
+// Railway informa en X-Forwarded-For (verificado en la fuente de
+// hyper-express 6.14.12: usa la primera entrada del header).
+const app = new HyperExpress.Server({ trust_proxy: true });
 const prisma = new PrismaClient();
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
 
