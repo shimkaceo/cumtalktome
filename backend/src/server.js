@@ -110,7 +110,12 @@ app.get('/:slug', async (request, response) => {
           riskScore
         }
       });
-      if (!isBotDetected) {
+      // El webview de Instagram solo es el trampolin: behavioralCheck.js
+      // rebota esa misma URL al navegador externo, que vuelve a pedir el
+      // enlace y ahi si cuenta el click. Contar tambien la pierna del
+      // webview duplicaria el click de cada usuario que viene de Instagram.
+      const esWebviewInstagram = /instagram/i.test(userAgent);
+      if (!isBotDetected && !esWebviewInstagram) {
         await prisma.linkVariant.update({
           where: { id: link.id },
           data: { clickCount: { increment: 1 } }

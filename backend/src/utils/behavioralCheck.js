@@ -1,29 +1,27 @@
 /**
- * La pagina que ve un visitante humano entre el clic en el enlace de la bio
- * y el destino final.
+ * La pagina intermedia que ve un visitante humano entre el toque del enlace
+ * de la bio y el destino final. No tiene ningun elemento con el que
+ * interactuar: solo un spinner mientras se procesa la salida.
  *
- * No se hace un redirect automatico: los navegadores integrados de las apps
- * (el de Instagram sobre todo) castigan esas cadenas y a veces las bloquean.
- * Hace falta un clic del usuario, y ese clic se aprovecha para algo mejor:
- * dentro del navegador integrado de Instagram en movil, el boton abre el
- * navegador externo con el esquema instagram://extbrowser/, que es donde el
- * contenido se ve bien. En cualquier otro caso el boton es un enlace normal
- * al destino: funciona siempre, incluso sin JavaScript.
+ * Flujo disenado:
+ *   1. Toque del enlace dentro de Instagram -> abre el webview integrado.
+ *   2. Esta pagina detecta el webview (User-Agent movil con "Instagram") y
+ *      redirige de inmediato, sin interaccion del usuario, al esquema
+ *      instagram://extbrowser/ con la MISMA URL: eso fuerza la apertura del
+ *      navegador externo (Safari/Chrome), que vuelve a pedir esta pagina.
+ *   3. Ya en el navegador externo el UA ya no contiene "Instagram": se
+ *      ejecuta el chequeo comportamental normal (POST a
+ *      /api/behavior-check con el token de sesion) y se redirige al
+ *      destino final.
+ *   4. Si a los 2 segundos el esquema no hubiera funcionado (la pagina
+ *      sigue visible dentro del webview), se hace ese mismo chequeo y se
+ *      redirige al destino dentro del propio webview.
  */
 
 export function generateBehavioralHTML(token, destino) {
-  // `token` queda reservado para validar la sesion contra /api/validate-token
-  // cuando se retome la comprobacion comportamental. Hoy no se usa, pero se
-  // mantiene en la firma para no tocar el punto de llamada en server.js.
-
-  // El destino se inyecta en dos contextos con reglas de escape distintas:
-  // atributo HTML (entidades) y literal de cadena dentro de <script>.
-  const enHtml = destino
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-  const enJs = destino
+  // El destino y el token se inyectan como literales de cadena dentro de
+  // <script>: barras, comillas y "<" se escapan para evitar inyeccion.
+  const enJs = (valor) => valor
     .replace(/\\/g, '\\\\')
     .replace(/"/g, '\\"')
     .replace(/</g, '\\u003c');
@@ -35,51 +33,81 @@ export function generateBehavioralHTML(token, destino) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Loading...</title>
     <style>
-        body{font-family:system-ui;text-align:center;padding:50px;background:#f5f5f5}
-        .spinner{width:40px;height:40px;border:4px solid #f3f3f3;border-top:4px solid #3498db;border-radius:50%;animation:spin 1s linear infinite;margin:20px auto}
+        html,body{height:100%;margin:0}
+        body{display:flex;align-items:center;justify-content:center;background:#fff}
+        .spinner{width:40px;height:40px;border:4px solid #f3f3f3;border-top:4px solid #3498db;border-radius:50%;animation:spin 1s linear infinite}
         @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
-        .message{color:#666}
-        .action-btn{margin-top:20px;padding:12px 24px;background-color:#3498db;color:#fff;border:none;border-radius:5px;cursor:pointer;text-decoration:none;display:inline-block;font-size:16px}
-        .action-btn:hover{background-color:#2980b9}
     </style>
 </head>
 <body>
+    <!-- Unico elemento visible: el spinner mientras se procesa la salida -->
     <div class="spinner"></div>
-    <div class="message">Loading content...</div>
-
-    <!-- Enlace normal al destino: la via que funciona en cualquier navegador,
-         con o sin JavaScript. En Instagram movil el script de abajo lo mejora. -->
-    <a href="${enHtml}" id="abrir" class="action-btn" rel="noopener">Open in Browser</a>
 
     <script>
         (function () {
-            const destino = "${enJs}";
-            const boton = document.getElementById('abrir');
+            const token = "${enJs(token)}";
+            const destino = "${enJs(destino)}";
             const ua = navigator.userAgent.toLowerCase();
 
-            // El navegador integrado de Instagram se identifica en el User
-            // Agent. Fuera de ahi el enlace normal ya hace todo lo necesario.
-            if (ua.indexOf('instagram') === -1) return;
+            // --- Senales pasivas que alimentan el chequeo del servidor ---
+            let mouseMoved = false;
+            let hasScrolled = false;
+            window.addEventListener('mousemove', function () { mouseMoved = true; }, { once: true, passive: true });
+            window.addEventListener('touchmove', function () { mouseMoved = true; }, { once: true, passive: true });
+            window.addEventListener('scroll', function () { hasScrolled = true; }, { once: true, passive: true });
 
-            const esquema = 'instagram://extbrowser/?url=' + encodeURIComponent(destino);
-            let cancelado = false;
+            // --- Chequeo comportamental y salida al destino final ---
+            async function pasarChequeoYRedirigir() {
+                try {
+                    // El POST no puede bloquear la salida mas de 1.5 s
+                    await Promise.race([
+                        fetch('/api/behavior-check', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                token: token,
+                                mouseMoved: mouseMoved,
+                                hasScrolled: hasScrolled,
+                                screenWidth: window.screen ? window.screen.width : 0,
+                                screenHeight: window.screen ? window.screen.height : 0
+                            }),
+                            keepalive: true
+                        }),
+                        new Promise(function (resolver) { setTimeout(resolver, 1500); })
+                    ]);
+                } catch (e) {
+                    // El chequeo nunca debe impedir la redireccion
+                }
+                window.location.replace(destino);
+            }
 
-            // Si el esquema funciona, esta pagina pasa a segundo plano al
-            // abrirse el navegador externo: no hay que disparar tambien el
-            // fallback dentro del navegador integrado.
-            document.addEventListener('visibilitychange', function () {
-                if (document.hidden) cancelado = true;
-            });
+            // --- Webview de Instagram: UA movil que contiene "instagram" ---
+            const esWebviewInstagram = ua.indexOf('instagram') !== -1 &&
+                /iphone|ipad|ipod|android|mobile/.test(ua);
 
-            boton.addEventListener('click', function (e) {
-                e.preventDefault();
-                window.location.href = esquema;
-                // Si el esquema no esta disponible el navegador se queda donde
-                // esta: un momento despues caemos al enlace normal.
+            if (esWebviewInstagram) {
+                // Si el esquema funciona, el navegador externo se abre y esta
+                // pagina pasa a segundo plano: eso es el exito, no un fallo.
+                let salioDeLaPagina = false;
+                document.addEventListener('visibilitychange', function () {
+                    if (document.hidden) salioDeLaPagina = true;
+                });
+                window.addEventListener('pagehide', function () { salioDeLaPagina = true; });
+
+                // Rebote inmediato al navegador externo con la MISMA URL
+                window.location.href = 'instagram://extbrowser/?url=' + encodeURIComponent(window.location.href);
+
+                // Fallback: si a los 2 s seguimos visibles, el esquema no
+                // funciono -> chequeo normal y destino dentro del webview
                 setTimeout(function () {
-                    if (!cancelado) window.location.href = destino;
-                }, 1500);
-            });
+                    if (!salioDeLaPagina) pasarChequeoYRedirigir();
+                }, 2000);
+                return;
+            }
+
+            // Navegador externo (o cualquier otro contexto): chequeo normal
+            // y redireccion inmediata al destino final
+            pasarChequeoYRedirigir();
         })();
     </script>
 </body>
