@@ -98,11 +98,12 @@ app.get('/test-turnstile', (request, response) => {
     </style>
 </head>
 <body>
-    <h2>Test de Turnstile (invisible)</h2>
+    <h2>Test de Turnstile</h2>
     <p>Sitekey: <code>${TURNSTILE_SITE_KEY}</code></p>
+    <p>Hostname: <code id="host">?</code> (debe estar en los Hostnames de este widget en el dashboard de Cloudflare)</p>
     <div id="estado">Esperando a que Turnstile resuelva...</div>
 
-    <div class="cf-turnstile" data-sitekey="${TURNSTILE_SITE_KEY}" data-callback="onTestSuccess" data-size="invisible"></div>
+    <div class="cf-turnstile" data-sitekey="${TURNSTILE_SITE_KEY}" data-callback="onTestSuccess" data-error-callback="onTestError" data-timeout-callback="onTestError"></div>
 
     <script>
         var resuelto = false;
@@ -123,10 +124,16 @@ app.get('/test-turnstile', (request, response) => {
                         'Turnstile resolvio, pero fallo el POST al backend: ' + e;
                 });
         };
+        window.onTestError = function (codigo) {
+            document.getElementById('estado').textContent =
+                'ERROR del widget: ' + codigo +
+                '. Revisa en el dashboard de Cloudflare (Turnstile, este widget, seccion Hostnames) que cumtalkto.me este en la lista.';
+        };
+        document.getElementById('host').textContent = location.hostname;
         setTimeout(function () {
             if (!resuelto) {
                 document.getElementById('estado').textContent =
-                    'TIMEOUT: Turnstile no resolvio en 12 s. Revisa la consola del navegador.';
+                    'TIMEOUT: Turnstile no resolvio en 12 s. Puede ser un bloqueador (adblock/shields) cortando challenges.cloudflare.com. Revisa la consola del navegador.';
             }
         }, 12000);
     </script>

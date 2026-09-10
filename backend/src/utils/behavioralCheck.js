@@ -53,9 +53,14 @@ export function generateBehavioralHTML(token, destino) {
     <!-- Unico elemento visible: el spinner mientras se procesa la salida -->
     <div class="spinner"></div>
 
-    <!-- Turnstile invisible. El callback debe existir en window ANTES de
-         que cargue el script de Cloudflare, que va al final del body. -->
-    <div class="cf-turnstile" data-sitekey="${TURNSTILE_SITE_KEY}" data-callback="onTurnstileSuccess" data-size="invisible"></div>
+    <!-- Turnstile. OJO: data-size solo acepta normal/flexible/compact; un
+         valor invalido (como "invisible") impide que el reto ejecute. La
+         invisibilidad real se configura creando el widget de tipo Invisible
+         en el dashboard de Cloudflare. Si el widget es Managed,
+         appearance=interaction-only lo mantiene fuera de la vista salvo que
+         exija interaccion del visitante. Los callbacks deben existir en
+         window ANTES de que cargue el script de CF, al final del body. -->
+    <div class="cf-turnstile" data-sitekey="${TURNSTILE_SITE_KEY}" data-callback="onTurnstileSuccess" data-error-callback="onTurnstileError" data-timeout-callback="onTurnstileError" data-appearance="interaction-only"></div>
 
     <script>
         (function () {
@@ -208,6 +213,14 @@ export function generateBehavioralHTML(token, destino) {
                         runBehavioralCheckTradicional();
                     }
                 }, 5000);
+            };
+
+            // --- Errores del widget (dominio no configurado, script
+            // bloqueado, red): degradacion INMEDIATA al chequeo
+            // tradicional en lugar de esperar el timer de 6 s ---
+            window.onTurnstileError = function (codigo) {
+                console.log('Turnstile: error ' + codigo + ', caida a behavioral check');
+                runBehavioralCheckTradicional();
             };
 
         })();
