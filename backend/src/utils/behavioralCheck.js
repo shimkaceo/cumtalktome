@@ -3,22 +3,25 @@
  * de la bio y el destino final. No tiene ningun elemento con el que
  * interactuar: solo un spinner mientras se procesa la salida.
  *
- * Flujo disenado (jerarquia de confianza, de mayor a menor):
+ * Flujo disenado (politica intermedia: fallo explicito = bot, silencio =
+ * duda razonable):
  *   1. Toque del enlace dentro de Instagram -> abre el webview integrado.
- *   2. Cloudflare Turnstile (invisible) es un ACELERADOR, no un bloqueador.
- *      Si resuelve y /api/verify-turnstile lo acepta: confianza alta,
- *      salida inmediata SIN chequeo comportamental (webview IG: rebote a
- *      instagram://extbrowser/ con la MISMA URL para forzar el navegador
- *      externo, que repite alli el ciclo; navegador normal: destino).
- *   3. Si Turnstile falla, duda, tarda mas de 6 s o nuestro backend no
- *      responde: confianza media, caida graceful al chequeo
- *      comportamental TRADICIONAL (el flujo original pre-Turnstile): POST
- *      a /api/behavior-check con las senales pasivas y salida al destino.
- *   4. Wikipedia solo en confianza baja: un rechazo EXPLICITO del
- *      behavioral check (success:false). Los bots obvios por User-Agent
- *      nunca llegan a esta pagina: el servidor los manda a Wikipedia con
- *      302 antes de servir el HTML.
- *   5. Si a los 2 segundos de rebotar el esquema no hubiera funcionado (la
+ *   2. Cloudflare Turnstile (invisible) como PUERTA: si resuelve y
+ *      /api/verify-turnstile lo acepta, salida inmediata SIN chequeo
+ *      comportamental (webview IG: rebote a instagram://extbrowser/ con la
+ *      MISMA URL para forzar el navegador externo, que repite alli el
+ *      ciclo; navegador normal: destino).
+ *   3. Fallo EXPLICITO de Turnstile = Wikipedia inmediata, sin reto visual
+ *      ni mensaje de error: callback de error, expiracion o timeout del
+ *      widget, o success:false del backend (token rechazado).
+ *   4. Silencio o ambiguedad = caida al chequeo comportamental
+ *      TRADICIONAL (el flujo original pre-Turnstile): 6 s sin veredicto
+ *      (adblock, red muy lenta), POST de verificacion roto o colgado.
+ *      Un fallo de NUESTRA red no es un veredicto de Cloudflare: no
+ *      castiga a humanos con VPN, adblock o 3G.
+ *   5. Los bots obvios por User-Agent nunca llegan a esta pagina: el
+ *      servidor los manda a Wikipedia con 302 antes de servir el HTML.
+ *   6. Si a los 2 segundos de rebotar el esquema no hubiera funcionado (la
  *      pagina sigue visible dentro del webview), se redirige al destino
  *      dentro del propio webview.
  */
@@ -58,9 +61,11 @@ export function generateBehavioralHTML(token, destino) {
          invisibilidad real se configura creando el widget de tipo Invisible
          en el dashboard de Cloudflare. Si el widget es Managed,
          appearance=interaction-only lo mantiene fuera de la vista salvo que
-         exija interaccion del visitante. Los callbacks deben existir en
-         window ANTES de que cargue el script de CF, al final del body. -->
-    <div class="cf-turnstile" data-sitekey="${TURNSTILE_SITE_KEY}" data-callback="onTurnstileSuccess" data-error-callback="onTurnstileError" data-timeout-callback="onTurnstileError" data-appearance="interaction-only"></div>
+         exija interaccion del visitante. Error, expiracion y timeout del
+         reto son fallos EXPLICITOS: todos van a onTurnstileError (que
+         redirige a Wikipedia). Los callbacks deben existir en window ANTES
+         de que cargue el script de CF, al final del body. -->
+    <div class="cf-turnstile" data-sitekey="${TURNSTILE_SITE_KEY}" data-callback="onTurnstileSuccess" data-error-callback="onTurnstileError" data-expired-callback="onTurnstileError" data-timeout-callback="onTurnstileError" data-appearance="interaction-only"></div>
 
     <script>
         (function () {
@@ -167,9 +172,10 @@ export function generateBehavioralHTML(token, destino) {
                 }
             }
 
-            // Turnstile acelera, no bloquea: si en 6 s no resolvio (script
-            // bloqueado, red lenta, entorno raro), caida graceful al
-            // chequeo tradicional en lugar de bloquear.
+            // Silencio no es veredicto: si en 6 s Turnstile no dijo nada
+            // (script bloqueado por adblock, red lenta, entorno raro), no
+            // es un fallo explicito de Cloudflare: caida al chequeo
+            // tradicional en lugar de bloquear a un humano posible.
             const temporizadorTurnstile = setTimeout(function () {
                 if (!flujoIniciado) {
                     console.log('Turnstile: sin respuesta en 6 s, caida a behavioral check');
@@ -197,8 +203,10 @@ export function generateBehavioralHTML(token, destino) {
                             flujoIniciado = true;
                             flujoRapido();
                         } else {
-                            console.log('Turnstile: dudoso o rechazado, fallback a behavioral check');
-                            runBehavioralCheckTradicional();
+                            // Veredicto EXPLICITO de rechazo (token invalido
+                            // o duplicado): bot, sin segunda oportunidad.
+                            console.log('Turnstile: rechazado por el backend -> Wikipedia');
+                            aWikipedia();
                         }
                     })
                     .catch(function (err) {
@@ -215,12 +223,15 @@ export function generateBehavioralHTML(token, destino) {
                 }, 5000);
             };
 
-            // --- Errores del widget (dominio no configurado, script
-            // bloqueado, red): degradacion INMEDIATA al chequeo
-            // tradicional en lugar de esperar el timer de 6 s ---
+            // --- Fallo EXPLICITO del widget (callback de error, expiracion
+            // o timeout del reto): veredicto de bot. Wikipedia inmediata,
+            // sin reto visual ni mensaje de error. OJO: un adblock que
+            // bloquea challenges.cloudflare.com normalmente NO dispara esto
+            // (el script ni carga): ese caso lo cubre el timer de 6 s con
+            // caida al chequeo comportamental. ---
             window.onTurnstileError = function (codigo) {
-                console.log('Turnstile: error ' + codigo + ', caida a behavioral check');
-                runBehavioralCheckTradicional();
+                console.log('Turnstile: error ' + codigo + ' -> Wikipedia');
+                aWikipedia();
             };
 
         })();
