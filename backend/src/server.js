@@ -1,7 +1,6 @@
 import HyperExpress from 'hyper-express';
 import { PrismaClient } from '@prisma/client';
 import Redis from 'ioredis';
-import { generateSemanticHTML } from './utils/contentGenerator.js';
 import { checkBlacklist, logAccess } from './middleware/security.js';
 import { rateLimit } from './middleware/rateLimit.js';
 import { generateToken, validateToken } from './utils/tokens.js';
@@ -133,23 +132,15 @@ app.get('/:slug', async (request, response) => {
       console.error('Error persistiendo visita:', e.message);
     }
     
-    // BOT: Mostrar contenido semantico
+    // BOT: 302 a Wikipedia. La deteccion ocurre antes de generar token o
+    // servir behavioralCheck: el bot nunca ve la pagina intermedia. La visita
+    // ya quedo registrada en AccessLog con isBot=true y sin click (el guard
+    // de clickCount excluye isBotDetected). Ojo: redirect() de hyper-express
+    // solo acepta la URL y siempre responde 302.
     if (isBotDetected) {
-      console.log(`BOT DETECTADO - Mostrando contenido semantico: ${slug}`);
-      
-      const linkData = {
-        slug: link.slug,
-        title: link.influencer?.nombre || 'Explorando Nuevas Perspectivas',
-        description: link.influencer?.categoria || 'Contenido exclusivo',
-        category: link.influencer?.categoria?.toLowerCase() || 'lifestyle',
-        image: '/assets/hero-1.jpg',
-        author: link.influencer?.nombre || 'Content Creator'
-      };
-      
-      const semanticHTML = generateSemanticHTML(linkData, 'bot');
-      response.setHeader('Content-Type', 'text/html; charset=utf-8');
-      response.setHeader('X-Robots-Tag', 'index, follow');
-      return response.send(semanticHTML);
+      console.log(`BOT DETECTADO - Redirigiendo a Wikipedia: ${slug}`);
+
+      return response.redirect('https://en.wikipedia.org/wiki/Shinka');
     }
     
     // HUMANO: Mostrar HTML de deteccion comportamental
