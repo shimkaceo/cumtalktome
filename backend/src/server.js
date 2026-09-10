@@ -41,8 +41,9 @@ function calculateRiskScore(headers, userAgent) {
 
 // CAPA 3: score mejorado con el fingerprint del cliente (capas 1 y 2 del
 // frontend: canvas, WebGL, nucleos y velocidades de ejecucion) mas
-// inconsistencias UA vs headers. Umbral de bloqueo 60: exige MULTIPLES
-// senales combinadas; un humano real rara vez pasa de 20-30 puntos.
+// inconsistencias UA vs headers y deteccion de VMs cloud (AWS/GCP/Azure)
+// donde corren crawlers de IA. Umbral de bloqueo 60: exige MULTIPLES
+// senales combinadas; un humano real rara vez pasa de 20-35 puntos.
 // Los tiempos y umbrales vienen calibrados para 48 h de logs (ver
 // 'CALIBRACION' en /api/verify-turnstile) antes de apretar nada.
 function calculateEnhancedRiskScore(headers, userAgent, fingerprint) {
@@ -67,14 +68,53 @@ function calculateEnhancedRiskScore(headers, userAgent, fingerprint) {
     }
     void vendor; // reservado: se loguea para calibracion futura
 
-    // HardwareConcurrency sospechoso
+    // Linux de escritorio (sin Android: su UA tambien contiene 'Linux')
+    const esLinuxDesktop = ua.includes('linux') && !ua.includes('android');
+
+    // HardwareConcurrency: nulo/1 = bot antiguo o VM headless minima.
+    // Muchos nucleos = posible VM cloud (AWS/GCP/Azure) donde corren los
+    // crawlers de IA (Grok y similares). Umbrales CONSERVADORES: un CPU
+    // consumer llega a 32 logicos (Ryzen 7950X = 16C/32T, Threadripper
+    // 7960X = 32); a partir de 48 ya es hierro de servidor o workstation
+    // exoticos.
     const hc = fingerprint.hardwareConcurrency;
     if (hc === null || hc === undefined) {
       score += 15; // no lo reporta (bots antiguos)
     } else if (hc === 1) {
       score += 10; // muy bajo (VMs headless)
-    } else if (hc > 32) {
-      score += 10; // improbable (servidor cloud)
+    } else if (hc >= 64) {
+      score += 35; // claramente servidor cloud (64+ nucleos logicos)
+    } else if (hc >= 48) {
+      score += 20; // servidor high-end o Threadripper poco comun
+    } else if (hc > 32 && esLinuxDesktop) {
+      score += 15; // >32 nucleos en Linux: workstation/servidor
+    }
+    // 2-32 nucleos: sin puntuar (rango consumer normal)
+
+    // === COMBINACIONES SOSPECHOSAS DE CLOUD ===
+    // Linux x86_64 (desktop, NO Android) con specs de servidor = VM de
+    // datacenter. Las GPUs de cloud (A100/H100/T4/Instinct/Tesla) no
+    // existen en maquinas consumer.
+    if (esLinuxDesktop && ua.includes('x86_64')) {
+      const gpuServidor = /nvidia a100|nvidia h100|nvidia t4|nvidia l4|tesla|amd instinct/.test(renderer);
+      const gpuConsumer = /radeon|geforce|intel|apple|mali|adreno/.test(renderer);
+
+      if (hc >= 32 && gpuServidor) {
+        score += 30; // GPU de data center + nucleos masivos
+      }
+      if (hc >= 64 && gpuConsumer) {
+        score += 25; // GPU consumer con 64+ nucleos = VM con passthrough
+      }
+    }
+
+    // === MOVIL vs DESKTOP ===
+    // Ningun telefono actual supera ~8 nucleos: un UA movil con nucleos
+    // de servidor es un bot mal spoofeado.
+    if (/android/.test(ua) && hc > 16) {
+      score += 30; // movil con nucleos fisicamente imposibles
+    }
+    if (/iphone|ipad/.test(ua) && hc > 8) {
+      score += 25; // iOS actual: max ~8 nucleos (A17 Pro = 6)
     }
 
     // Velocidades sospechosas (capa 2)
