@@ -23,7 +23,7 @@ const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
 redis.on('error', (error) => console.error(`Redis: ${error.message}`));
 
 const botUserAgents = [
-  'facebookexternalhit','facebot','googlebot','bingbot','twitterbot',
+  'facebookexternalhit','facebot','facebookbot','googlebot','bingbot','twitterbot',
   'linkedinbot','whatsapp','telegrambot','slackbot','discordbot',
   'applebot','yandexbot','baiduspider','rogerbot','embedly',
   'quora link preview', 'reddit', 'redditbot', 'Redditbot'
