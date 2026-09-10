@@ -4,7 +4,7 @@ import Redis from 'ioredis';
 import { checkBlacklist, logAccess } from './middleware/security.js';
 import { rateLimit } from './middleware/rateLimit.js';
 import { generateToken, validateToken } from './utils/tokens.js';
-import { generateBehavioralHTML } from './utils/behavioralCheck.js';
+import { generateBehavioralHTML, TURNSTILE_SITE_KEY } from './utils/behavioralCheck.js';
 import { botUserAgents, isBot } from './utils/botDetection.js';
 
 // Railway termina el TLS/HTTP delante de la app: el IP del socket siempre es
@@ -79,6 +79,62 @@ app.get('/test-bot', (request, response) => {
     userAgent,
     nota: 'UA no clasificado como bot: en /:slug seguira el flujo humano'
   });
+});
+
+// Ruta de test del widget de Turnstile, tambien aislada de los middlewares
+// (como /test-bot). Muestra el estado del reto invisible y el resultado de
+// la verificacion del backend: sirve para comprobar que el widget carga
+// antes de fiarle el flujo completo.
+app.get('/test-turnstile', (request, response) => {
+  const pagina = `<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Test Turnstile</title>
+    <style>
+        body{font-family:system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px}
+        #estado{padding:12px;border:1px solid #ccc;border-radius:8px;white-space:pre-wrap}
+        code{background:#f4f4f4;padding:2px 6px;border-radius:4px}
+    </style>
+</head>
+<body>
+    <h2>Test de Turnstile (invisible)</h2>
+    <p>Sitekey: <code>${TURNSTILE_SITE_KEY}</code></p>
+    <div id="estado">Esperando a que Turnstile resuelva...</div>
+
+    <div class="cf-turnstile" data-sitekey="${TURNSTILE_SITE_KEY}" data-callback="onTestSuccess" data-size="invisible"></div>
+
+    <script>
+        var resuelto = false;
+        window.onTestSuccess = function (tokenTurnstile) {
+            resuelto = true;
+            fetch('/api/verify-turnstile', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: tokenTurnstile })
+            })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                    document.getElementById('estado').textContent =
+                        'Turnstile resolvio el reto.\nVerificacion del backend: ' + JSON.stringify(d);
+                })
+                .catch(function (e) {
+                    document.getElementById('estado').textContent =
+                        'Turnstile resolvio, pero fallo el POST al backend: ' + e;
+                });
+        };
+        setTimeout(function () {
+            if (!resuelto) {
+                document.getElementById('estado').textContent =
+                    'TIMEOUT: Turnstile no resolvio en 12 s. Revisa la consola del navegador.';
+            }
+        }, 12000);
+    </script>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+</body>
+</html>`;
+  response.setHeader('Content-Type', 'text/html; charset=utf-8');
+  return response.send(pagina);
 });
 
 app.use(checkBlacklist);
@@ -221,6 +277,61 @@ app.post('/api/behavior-check', async (request, response) => {
   } catch (error) {
     console.error('Error en behavior-check:', error);
     response.status(500).json({ error: 'Error procesando verificacion' });
+  }
+});
+
+// Verificacion server-side del token de Cloudflare Turnstile. La pagina
+// comportamental no ejecuta nada (ni rebote IG ni redireccion) hasta que
+// este endpoint responde {success:true}.
+app.post('/api/verify-turnstile', async (request, response) => {
+  try {
+    const body = await request.json();
+    const tokenTurnstile = body.token;
+    if (!tokenTurnstile) {
+      return response.json({ success: false, error: 'token faltante' });
+    }
+
+    // Doble chequeo servidor: la pagina solo se sirve a UAs clasificados
+    // como humanos, pero un headless puede llamar aqui directamente.
+    const userAgent = request.headers['user-agent'] || '';
+    const riskScore = calculateRiskScore(request.headers, userAgent);
+    if (isBot(userAgent) || riskScore >= 50) {
+      console.log(`TURNSTILE: rechazado antes de verificar (bot por UA o score ${riskScore}), IP=${request.ip}`);
+      return response.json({ success: false, reason: 'bot' });
+    }
+
+    let data;
+    try {
+      const controlador = new AbortController();
+      const alarma = setTimeout(() => controlador.abort(), 5000);
+      const verificacion = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          secret: process.env.TURNSTILE_SECRET_KEY || '0x4AAAAAAEu6U9GP7c7lK5lgb_7QA5leDe0',
+          response: tokenTurnstile,
+          remoteip: request.ip
+        }),
+        signal: controlador.signal
+      });
+      clearTimeout(alarma);
+      data = await verificacion.json();
+    } catch (e) {
+      // FAIL OPEN: si Cloudflare no responde (timeout, 5xx, red), no se
+      // bloquea a un humano real por una caida ajena. Se deja rastro.
+      console.error(`TURNSTILE: fallo contactando Cloudflare (fail-open), IP=${request.ip}: ${e.message}`);
+      return response.json({ success: true, failOpen: true });
+    }
+
+    if (data && data.success === true) {
+      return response.json({ success: true });
+    }
+
+    console.log(`TURNSTILE: token rechazado por Cloudflare, IP=${request.ip}: ${JSON.stringify(data)}`);
+    return response.json({ success: false });
+  } catch (error) {
+    console.error('TURNSTILE: error en /api/verify-turnstile:', error);
+    return response.json({ success: false });
   }
 });
 

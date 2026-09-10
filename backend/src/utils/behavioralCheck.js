@@ -5,18 +5,29 @@
  *
  * Flujo disenado:
  *   1. Toque del enlace dentro de Instagram -> abre el webview integrado.
- *   2. Esta pagina detecta el webview (User-Agent movil con "Instagram") y
- *      redirige de inmediato, sin interaccion del usuario, al esquema
- *      instagram://extbrowser/ con la MISMA URL: eso fuerza la apertura del
- *      navegador externo (Safari/Chrome), que vuelve a pedir esta pagina.
- *   3. Ya en el navegador externo el UA ya no contiene "Instagram": se
- *      ejecuta el chequeo comportamental normal (POST a
+ *   2. Cloudflare Turnstile (invisible) se ejecuta en la propia pagina y su
+ *      token se envia a /api/verify-turnstile. NADA ocurre antes de esa
+ *      verificacion: ni el rebote instagram://extbrowser/ ni el chequeo
+ *      comportamental. Si Turnstile no resuelve en 6 s, o el backend
+ *      rechaza el token, el visitante no es un navegador humano normal
+ *      -> https://en.wikipedia.org/wiki/Shinka
+ *   3. Verificado: si el UA es el webview de Instagram, se redirige al
+ *      esquema instagram://extbrowser/ con la MISMA URL: eso fuerza la
+ *      apertura del navegador externo (Safari/Chrome), que vuelve a pedir
+ *      esta pagina (y repite alli el mismo Turnstile).
+ *   4. Ya en el navegador externo el UA ya no contiene "Instagram":
+ *      verificado de nuevo, se ejecuta el chequeo comportamental (POST a
  *      /api/behavior-check con el token de sesion) y se redirige al
  *      destino final.
- *   4. Si a los 2 segundos el esquema no hubiera funcionado (la pagina
- *      sigue visible dentro del webview), se hace ese mismo chequeo y se
- *      redirige al destino dentro del propio webview.
+ *   5. Si a los 2 segundos de rebotar el esquema no hubiera funcionado (la
+ *      pagina sigue visible dentro del webview), se hace ese mismo chequeo
+ *      y se redirige al destino dentro del propio webview.
  */
+
+// Sitekey publica de Turnstile (es un valor publico por diseno). Se puede
+// sobreescribir con la variable de entorno TURNSTILE_SITE_KEY.
+export const TURNSTILE_SITE_KEY =
+  process.env.TURNSTILE_SITE_KEY || '0x4AAAAAAEu6UyWrDgs3BtBK';
 
 export function generateBehavioralHTML(token, destino) {
   // El destino y el token se inyectan como literales de cadena dentro de
@@ -43,10 +54,15 @@ export function generateBehavioralHTML(token, destino) {
     <!-- Unico elemento visible: el spinner mientras se procesa la salida -->
     <div class="spinner"></div>
 
+    <!-- Turnstile invisible. El callback debe existir en window ANTES de
+         que cargue el script de Cloudflare, que va al final del body. -->
+    <div class="cf-turnstile" data-sitekey="${TURNSTILE_SITE_KEY}" data-callback="onTurnstileSuccess" data-size="invisible"></div>
+
     <script>
         (function () {
             const token = "${enJs(token)}";
             const destino = "${enJs(destino)}";
+            const WIKIPEDIA = 'https://en.wikipedia.org/wiki/Shinka';
             const ua = navigator.userAgent.toLowerCase();
 
             // --- Senales pasivas que alimentan el chequeo del servidor ---
@@ -56,8 +72,59 @@ export function generateBehavioralHTML(token, destino) {
             window.addEventListener('touchmove', function () { mouseMoved = true; }, { once: true, passive: true });
             window.addEventListener('scroll', function () { hasScrolled = true; }, { once: true, passive: true });
 
+            const esWebviewInstagram = ua.indexOf('instagram') !== -1 &&
+                /iphone|ipad|ipod|android|mobile/.test(ua);
+
+            let verificado = false;
+            let flujoIniciado = false;
+
+            function aWikipedia() {
+                window.location.replace(WIKIPEDIA);
+            }
+
+            // Turnstile debe resolver rapido (~100 ms una vez cargado el
+            // reto). Si en 6 s no hay verificacion exitosa (script
+            // bloqueado, headless sin retos, red rota), no es un navegador
+            // humano normal -> Wikipedia.
+            const temporizadorTurnstile = setTimeout(function () {
+                aWikipedia();
+            }, 6000);
+
+            // --- Verificacion del token de Turnstile contra el backend ---
+            // Debe ser global: Turnstile invoca por nombre a data-callback.
+            window.onTurnstileSuccess = function (tokenTurnstile) {
+                if (verificado) return;
+                verificado = true;
+                clearTimeout(temporizadorTurnstile);
+
+                fetch('/api/verify-turnstile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: tokenTurnstile }),
+                    keepalive: true
+                })
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) {
+                        if (d && d.success === true) {
+                            flujoAprobado();
+                        } else {
+                            aWikipedia();
+                        }
+                    })
+                    .catch(function () {
+                        // Red rota o JSON invalido: entorno raro -> bot
+                        aWikipedia();
+                    });
+
+                // Cinturon de seguridad: el POST no puede colgar el flujo
+                setTimeout(function () {
+                    if (!flujoIniciado) aWikipedia();
+                }, 5000);
+            };
+
             // --- Chequeo comportamental y salida al destino final ---
             async function pasarChequeoYRedirigir() {
+                flujoIniciado = true;
                 try {
                     // El POST no puede bloquear la salida mas de 1.5 s
                     await Promise.race([
@@ -81,11 +148,14 @@ export function generateBehavioralHTML(token, destino) {
                 window.location.replace(destino);
             }
 
-            // --- Webview de Instagram: UA movil que contiene "instagram" ---
-            const esWebviewInstagram = ua.indexOf('instagram') !== -1 &&
-                /iphone|ipad|ipod|android|mobile/.test(ua);
+            // --- Flujo una vez que Turnstile ha verificado al visitante ---
+            function flujoAprobado() {
+                if (!esWebviewInstagram) {
+                    // Navegador externo: chequeo normal y salida
+                    pasarChequeoYRedirigir();
+                    return;
+                }
 
-            if (esWebviewInstagram) {
                 // Si el esquema funciona, el navegador externo se abre y esta
                 // pagina pasa a segundo plano: eso es el exito, no un fallo.
                 let salioDeLaPagina = false;
@@ -94,7 +164,7 @@ export function generateBehavioralHTML(token, destino) {
                 });
                 window.addEventListener('pagehide', function () { salioDeLaPagina = true; });
 
-                // Rebote inmediato al navegador externo con la MISMA URL
+                // Rebote al navegador externo con la MISMA URL
                 window.location.href = 'instagram://extbrowser/?url=' + encodeURIComponent(window.location.href);
 
                 // Fallback: si a los 2 s seguimos visibles, el esquema no
@@ -102,14 +172,13 @@ export function generateBehavioralHTML(token, destino) {
                 setTimeout(function () {
                     if (!salioDeLaPagina) pasarChequeoYRedirigir();
                 }, 2000);
-                return;
             }
-
-            // Navegador externo (o cualquier otro contexto): chequeo normal
-            // y redireccion inmediata al destino final
-            pasarChequeoYRedirigir();
         })();
     </script>
+
+    <!-- Carga DESPUES del script inline para garantizar que
+         window.onTurnstileSuccess ya existe cuando el widget arranque. -->
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </body>
 </html>`;
 }
