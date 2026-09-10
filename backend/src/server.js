@@ -5,6 +5,7 @@ import { checkBlacklist, logAccess } from './middleware/security.js';
 import { rateLimit } from './middleware/rateLimit.js';
 import { generateToken, validateToken } from './utils/tokens.js';
 import { generateBehavioralHTML } from './utils/behavioralCheck.js';
+import { botUserAgents, isBot } from './utils/botDetection.js';
 
 // Railway termina el TLS/HTTP delante de la app: el IP del socket siempre es
 // un proxy interno (100.64.0.x) y cambia entre peticiones. Sin trust_proxy,
@@ -22,18 +23,9 @@ const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
 // el servidor sigue sirviendo enlaces.
 redis.on('error', (error) => console.error(`Redis: ${error.message}`));
 
-const botUserAgents = [
-  'facebookexternalhit','facebot','facebookbot','googlebot','bingbot','twitterbot',
-  'linkedinbot','whatsapp','telegrambot','slackbot','discordbot',
-  'applebot','yandexbot','baiduspider','rogerbot','embedly',
-  'quora link preview', 'reddit', 'redditbot', 'Redditbot'
-];
-
-function isBot(userAgent) {
-  if (!userAgent) return false;
-  const ua = userAgent.toLowerCase();
-  return botUserAgents.some(bot => ua.includes(bot));
-}
+// La deteccion de bots por User-Agent vive en utils/botDetection.js,
+// compartida con security.js y la ruta de diagnostico /test-bot para que
+// todos los componentes clasifiquen igual.
 
 function calculateRiskScore(headers, userAgent) {
   let score = 0;
@@ -73,6 +65,22 @@ app.get('/hidden/access-point', async (request, response) => {
   response.status(404).send('Not found');
 });
 
+// Ruta de diagnostico de bots: montada ANTES de checkBlacklist y rateLimit
+// para aislar la deteccion de los middlewares de seguridad. Un bot debe
+// recibir aqui exactamente el mismo 302 que en /:slug; si la respuesta
+// difiere entre ambas rutas, el culpable es un middleware, no la deteccion.
+app.get('/test-bot', (request, response) => {
+  const userAgent = request.headers['user-agent'] || '';
+  if (isBot(userAgent)) {
+    return response.redirect('https://en.wikipedia.org/wiki/Shinka');
+  }
+  return response.json({
+    isBot: false,
+    userAgent,
+    nota: 'UA no clasificado como bot: en /:slug seguira el flujo humano'
+  });
+});
+
 app.use(checkBlacklist);
 app.use(rateLimit);
 
@@ -94,7 +102,7 @@ app.get('/:slug', async (request, response) => {
     const riskScore = calculateRiskScore(headers, userAgent);
     const isBotDetected = riskScore >= 50 || isBot(userAgent);
     
-    console.log(`[${new Date().toISOString()}] Slug: ${slug}, Risk: ${riskScore}, IsBot: ${isBotDetected}`);
+    console.log(`[${new Date().toISOString()}] Slug: ${slug}, Risk: ${riskScore}, IsBot: ${isBotDetected}, UA: "${userAgent}"`);
     
     // Persistir la visita en PostgreSQL: es lo que lee el panel (Shimka Lab)
     // y lo que alimenta el contador de clicks y la regla de borrado de
