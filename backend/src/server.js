@@ -39,6 +39,106 @@ function calculateRiskScore(headers, userAgent) {
   return score;
 }
 
+// CAPA 3: score mejorado con el fingerprint del cliente (capas 1 y 2 del
+// frontend: canvas, WebGL, nucleos y velocidades de ejecucion) mas
+// inconsistencias UA vs headers. Umbral de bloqueo 60: exige MULTIPLES
+// senales combinadas; un humano real rara vez pasa de 20-30 puntos.
+// Los tiempos y umbrales vienen calibrados para 48 h de logs (ver
+// 'CALIBRACION' en /api/verify-turnstile) antes de apretar nada.
+function calculateEnhancedRiskScore(headers, userAgent, fingerprint) {
+  let score = 0;
+  const ua = (userAgent || '').toLowerCase();
+
+  // === ANALISIS DE FINGERPRINT (del frontend) ===
+
+  if (fingerprint) {
+    // Canvas vacio o muy corto: headless omite el renderizado
+    if (!fingerprint.canvas || fingerprint.canvas.length < 50) {
+      score += 25;
+    }
+
+    // WebGL en software/VM: Mesa, LLVM o SwiftShader son emulados
+    const renderer = (fingerprint.webgl?.renderer || '').toLowerCase();
+    const vendor = (fingerprint.webgl?.vendor || '').toLowerCase();
+
+    if (renderer.includes('mesa') || renderer.includes('llvm') ||
+        renderer.includes('swiftshader') || renderer.includes('software')) {
+      score += 30;
+    }
+    void vendor; // reservado: se loguea para calibracion futura
+
+    // HardwareConcurrency sospechoso
+    const hc = fingerprint.hardwareConcurrency;
+    if (hc === null || hc === undefined) {
+      score += 15; // no lo reporta (bots antiguos)
+    } else if (hc === 1) {
+      score += 10; // muy bajo (VMs headless)
+    } else if (hc > 32) {
+      score += 10; // improbable (servidor cloud)
+    }
+
+    // Velocidades sospechosas (capa 2)
+    if (fingerprint.speeds) {
+      if (fingerprint.speeds.canvasRender < 2) {
+        score += 20; // demasiado rapido (cache/omision)
+      }
+      if (fingerprint.speeds.mathLoop < 5) {
+        score += 15; // VM optimizada o automatizacion
+      }
+      if (fingerprint.speeds.total > 1000) {
+        score += 10; // demasiado lento (VM sobrecargada)
+      }
+    }
+  }
+
+  // === INCONSISTENCIAS UA vs HEADERS ===
+
+  // Chrome debe mandar sec-ch-ua
+  if (ua.includes('chrome') && !ua.includes('edg/')) {
+    if (!headers['sec-ch-ua']) {
+      score += 20; // Chrome sin headers de cliente
+    }
+  }
+
+  // Safari siempre manda Accept-Language completo
+  if (ua.includes('safari') && !ua.includes('chrome')) {
+    const acceptLang = headers['accept-language'] || '';
+    if (!acceptLang || acceptLang.length < 5) {
+      score += 15; // Safari sin idioma
+    }
+  }
+
+  // Firefox manda Accept-Encoding con gzip
+  if (ua.includes('firefox')) {
+    const acceptEnc = headers['accept-encoding'] || '';
+    if (!acceptEnc.includes('gzip')) {
+      score += 10; // Firefox raro sin gzip
+    }
+  }
+
+  // === HEADERS FALTANTES O SOSPECHOSOS ===
+
+  // Accept incompleto (bots genericos). OJO: un fetch() del navegador
+  // tambien manda */*, asi que esta senal sola no vale nada: solo pesa
+  // combinada con otras.
+  const accept = headers['accept'] || '';
+  if (accept === '*/*' || accept === 'text/html') {
+    score += 10;
+  }
+
+  // Sin Accept-Language (raro en humanos)
+  if (!headers['accept-language']) {
+    score += 15;
+  }
+
+  // Sec-Fetch: los navegadores modernos los mandan
+  if (!headers['sec-fetch-site'] && !headers['sec-fetch-mode']) {
+    score += 10; // navegador antiguo o bot
+  }
+
+  return score;
+}
+
 // Clasificacion burda por User Agent, solo para el campo deviceType del log.
 function tipoDispositivo(userAgent) {
   const ua = (userAgent || '').toLowerCase();
@@ -305,6 +405,31 @@ app.post('/api/verify-turnstile', async (request, response) => {
     if (isBot(userAgent) || riskScore >= 50) {
       console.log(`TURNSTILE: rechazado antes de verificar (bot por UA o score ${riskScore}), IP=${request.ip}`);
       return response.json({ success: false, reason: 'bot' });
+    }
+
+    // CAPAS 1-3: fingerprint (canvas + WebGL + nucleos) y velocidades del
+    // cliente + inconsistencias UA/headers. Umbral 60, conservador:
+    // bloquea solo con MULTIPLES senales combinadas. Un success:false
+    // aqui es un fallo EXPLICITO mas: el cliente manda el visitante a
+    // Wikipedia. El LOG de calibracion (48 h) sirve para ver si algun
+    // humano real supera 55 y ajustar antes de apretar.
+    const fingerprint = body.fingerprint || null;
+    const scoreFingerprint = calculateEnhancedRiskScore(request.headers, userAgent, fingerprint);
+    console.log('CALIBRACION ' + JSON.stringify({
+      ua: userAgent,
+      score: scoreFingerprint,
+      fingerprint: {
+        hasCanvas: !!fingerprint?.canvas,
+        webglRenderer: fingerprint?.webgl?.renderer,
+        hwConc: fingerprint?.hardwareConcurrency,
+        canvasMs: fingerprint?.speeds?.canvasRender,
+        mathMs: fingerprint?.speeds?.mathLoop
+      },
+      isBlocked: scoreFingerprint >= 60
+    }));
+    if (scoreFingerprint >= 60) {
+      console.log(`TURNSTILE: bloqueado por fingerprint (score ${scoreFingerprint}), IP=${request.ip}`);
+      return response.json({ success: false, reason: 'bot_fingerprint', score: scoreFingerprint });
     }
 
     let data;

@@ -24,6 +24,12 @@
  *   6. Si a los 2 segundos de rebotar el esquema no hubiera funcionado (la
  *      pagina sigue visible dentro del webview), se redirige al destino
  *      dentro del propio webview.
+ *
+ * CAPAS de senales que acompanan al token: fingerprint pasivo (canvas +
+ * WebGL + nucleos) y velocidades de ejecucion, recolectados de forma
+ * sincrona al cargar y enviados en el POST a /api/verify-turnstile. El
+ * backend los puntua (umbral 60, multiples senales juntas) y un
+ * success:false por fingerprint tambien acaba en Wikipedia.
  */
 
 // Sitekey publica de Turnstile (es un valor publico por diseno). Se puede
@@ -86,6 +92,112 @@ export function generateBehavioralHTML(token, destino) {
 
             let verificado = false;      // Turnstile ya dio su veredicto
             let flujoIniciado = false;   // ya se salio por algun camino
+
+            // --- CAPA 1: fingerprint pasivo (canvas + WebGL + hardware) ---
+            // Sincrono, nada mas cargar y ANTES de que Turnstile resuelva:
+            // acompagna al token en el POST a /api/verify-turnstile. Un
+            // navegador headless renderiza distinto u omite partes del
+            // canvas, usa renderizadores de software (Mesa, SwiftShader) y
+            // reporta numeros de nucleos tipicos de VM.
+            function collectFingerprint() {
+                const fingerprint = {
+                    canvas: null,
+                    webgl: { renderer: null, vendor: null },
+                    hardwareConcurrency: null,
+                    timestamp: Date.now()
+                };
+
+                // 1. Canvas fingerprinting (rapido, ~10 ms)
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 200;
+                    canvas.height = 50;
+                    const ctx = canvas.getContext('2d');
+
+                    // Contenido que los headless suelen renderizar distinto
+                    ctx.fillStyle = 'rgb(255, 0, 0)';
+                    ctx.fillRect(0, 0, 200, 50);
+                    ctx.fillStyle = 'rgb(0, 255, 0)';
+                    ctx.font = '20px Arial';
+                    ctx.fillText('BotCheck v1.2', 10, 30);
+
+                    // Degradado que algunos headless omiten
+                    const gradient = ctx.createLinearGradient(0, 0, 200, 0);
+                    gradient.addColorStop(0, 'blue');
+                    gradient.addColorStop(1, 'white');
+                    ctx.fillStyle = gradient;
+                    ctx.fillRect(0, 40, 200, 10);
+
+                    // Solo los primeros caracteres: suficiente para el score
+                    fingerprint.canvas = canvas.toDataURL('image/png').substring(0, 100);
+                } catch (e) {
+                    fingerprint.canvas = 'error';
+                }
+
+                // 2. WebGL: detectar renderizadores de software / VM
+                try {
+                    const gl = document.createElement('canvas').getContext('webgl') ||
+                        document.createElement('canvas').getContext('experimental-webgl');
+                    if (gl) {
+                        const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                        if (debugInfo) {
+                            fingerprint.webgl.renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+                            fingerprint.webgl.vendor = gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL);
+                        }
+                    }
+                } catch (e) {
+                    fingerprint.webgl = { renderer: 'error', vendor: 'error' };
+                }
+
+                // 3. Nucleos: bots tipicos 1-2 o valores de servidor cloud
+                fingerprint.hardwareConcurrency = navigator.hardwareConcurrency || null;
+
+                return fingerprint;
+            }
+
+            // --- CAPA 2: velocidades de ejecucion (timing) ---
+            // Un canvas de 500x500 con 1000 rects y un bucle de 1M de
+            // operaciones: los tiempos imposiblemente rapidos (omision o
+            // caché) o irregulares delatan VMs y automatizaciones.
+            function measureExecutionSpeed() {
+                const speeds = {
+                    canvasRender: 0,
+                    mathLoop: 0,
+                    total: 0
+                };
+
+                // Test 1: tiempo de renderizado de un canvas complejo
+                const startCanvas = performance.now();
+                try {
+                    const c = document.createElement('canvas');
+                    c.width = 500;
+                    c.height = 500;
+                    const x = c.getContext('2d');
+                    for (let i = 0; i < 1000; i++) {
+                        x.fillStyle = 'hsl(' + i + ', 100%, 50%)';
+                        x.fillRect(i % 50 * 10, Math.floor(i / 50) * 10, 10, 10);
+                    }
+                    c.toDataURL();
+                } catch (e) { }
+                speeds.canvasRender = performance.now() - startCanvas;
+
+                // Test 2: bucle matematico pesado (VMs inconsistentes)
+                const startMath = performance.now();
+                let resultadoBucle = 0;
+                for (let i = 0; i < 1000000; i++) {
+                    resultadoBucle += Math.sin(i) * Math.cos(i);
+                }
+                speeds.mathLoop = performance.now() - startMath;
+
+                speeds.total = performance.now() - startCanvas;
+
+                return speeds;
+            }
+
+            // Se recolecta UNA vez, de forma sincrona, nada mas cargar:
+            // cuesta decimas de segundo y viaja con el token de Turnstile.
+            const huella = collectFingerprint();
+            huella.speeds = measureExecutionSpeed();
 
             function aWikipedia() {
                 window.location.replace(WIKIPEDIA);
@@ -190,10 +302,12 @@ export function generateBehavioralHTML(token, destino) {
                 verificado = true;
                 clearTimeout(temporizadorTurnstile);
 
+                // El token viaja junto al fingerprint (capas 1 y 2) para
+                // que el backend lo puntue antes de aceptar el token.
                 fetch('/api/verify-turnstile', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ token: tokenTurnstile }),
+                    body: JSON.stringify({ token: tokenTurnstile, fingerprint: huella, timestamp: Date.now() }),
                     keepalive: true
                 })
                     .then(function (r) { return r.json(); })
