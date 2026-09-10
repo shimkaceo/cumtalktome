@@ -11,6 +11,11 @@ const app = new HyperExpress.Server();
 const prisma = new PrismaClient();
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
 
+// Si Redis cae, ioredis reintenta la conexion en bucle: sin listener, cada
+// intento imprime el error sin control. Con el queda una linea por intento y
+// el servidor sigue sirviendo enlaces.
+redis.on('error', (error) => console.error(`Redis: ${error.message}`));
+
 const botUserAgents = [
   'facebookexternalhit','facebot','googlebot','bingbot','twitterbot',
   'linkedinbot','whatsapp','telegrambot','slackbot','discordbot',
@@ -34,6 +39,14 @@ function calculateRiskScore(headers, userAgent) {
   if (headers['x-purpose'] === 'preview') score += 15;
   if (headers['x-fetch-mode']) score += 10;
   return score;
+}
+
+// Clasificacion burda por User Agent, solo para el campo deviceType del log.
+function tipoDispositivo(userAgent) {
+  const ua = (userAgent || '').toLowerCase();
+  if (/mobile|iphone|ipod|android/.test(ua)) return 'mobile';
+  if (/ipad|tablet/.test(ua)) return 'tablet';
+  return 'desktop';
 }
 
 app.use(logAccess);
@@ -77,15 +90,36 @@ app.get('/:slug', async (request, response) => {
     
     console.log(`[${new Date().toISOString()}] Slug: ${slug}, Risk: ${riskScore}, IsBot: ${isBotDetected}`);
     
+    // Persistir la visita en PostgreSQL: es lo que lee el panel (Shimka Lab)
+    // y lo que alimenta el contador de clicks y la regla de borrado de
+    // enlaces. Hasta ahora solo se escribia en una lista de Redis que nadie
+    // consumia y los contadores quedaban a cero.
+    // Se registra toda visita con su bandera isBot; el contador de clicks
+    // solo sube para humanos: las previews de WhatsApp o Telegram no son
+    // clics de verdad e inflarian la metrica del creador.
     try {
-      await redis.lpush(`analytics:${link.id}`, JSON.stringify({
-        timestamp: new Date().toISOString(),
-        userAgent: userAgent.substring(0, 200),
-        ip: request.ip,
-        riskScore,
-        isBot: isBotDetected
-      }));
-    } catch (e) {}
+      await prisma.accessLog.create({
+        data: {
+          variantId: link.id,
+          influencerId: link.influencerId,
+          ipAddress: request.ip,
+          userAgent: userAgent.substring(0, 200),
+          deviceType: tipoDispositivo(userAgent),
+          referrer: request.headers['referer'] || null,
+          isBot: isBotDetected,
+          riskScore
+        }
+      });
+      if (!isBotDetected) {
+        await prisma.linkVariant.update({
+          where: { id: link.id },
+          data: { clickCount: { increment: 1 } }
+        });
+      }
+    } catch (e) {
+      // Una metrica que falla no debe romper la redireccion
+      console.error('Error persistiendo visita:', e.message);
+    }
     
     // BOT: Mostrar contenido semantico
     if (isBotDetected) {

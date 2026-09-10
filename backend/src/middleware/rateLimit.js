@@ -1,6 +1,9 @@
 import Redis from 'ioredis';
 
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+// Ver server.js: sin listener, un Redis caido satura el log de reintentos
+redis.on('error', (error) => console.error('Redis:', error.message));
+
 const WINDOW_MS = 60000; // 1 minuto
 const MAX_REQUESTS = 10; // máximo 10 requests por minuto
 

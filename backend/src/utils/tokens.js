@@ -2,6 +2,8 @@ import { randomUUID } from 'crypto';
 import Redis from 'ioredis';
 
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+// Ver server.js: sin listener, un Redis caido satura el log de reintentos
+redis.on('error', (error) => console.error('Redis:', error.message));
 
 // Generar token único
 export async function generateToken(ip, userAgent) {

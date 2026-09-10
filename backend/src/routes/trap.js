@@ -3,6 +3,8 @@ import Redis from 'ioredis';
 
 const router = new Router();
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+// Ver server.js: sin listener, un Redis caido satura el log de reintentos
+redis.on('error', (error) => console.error('Redis:', error.message));
 
 // Endpoint honeypot - enlaces invisibles apuntan aquí
 router.get('/trap', async (request, response) => {
