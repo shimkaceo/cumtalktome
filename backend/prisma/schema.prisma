@@ -28,6 +28,7 @@ model LinkVariant {
   clickCount    Int            @default(0)
   isActive      Boolean        @default(true)
   archivedAt    DateTime?
+  createdBy     String?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   
@@ -36,6 +37,7 @@ model LinkVariant {
   
   @@index([slug])
   @@index([influencerId])
+  @@index([createdBy])
 }
 
 model AccessLog {
