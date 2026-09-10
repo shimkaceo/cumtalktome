@@ -27,6 +27,7 @@ model LinkVariant {
   slug          String         @unique
   clickCount    Int            @default(0)
   isActive      Boolean        @default(true)
+  archivedAt    DateTime?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   
