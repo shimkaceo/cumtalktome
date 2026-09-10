@@ -3,22 +3,22 @@
  * de la bio y el destino final. No tiene ningun elemento con el que
  * interactuar: solo un spinner mientras se procesa la salida.
  *
- * Flujo disenado (puerta dura: todo o nada):
+ * Flujo disenado (jerarquia de confianza, de mayor a menor):
  *   1. Toque del enlace dentro de Instagram -> abre el webview integrado.
- *   2. Cloudflare Turnstile 100% invisible como PUERTA, no acelerador.
- *      La invisibilidad real la da el tipo de widget Invisible en el
- *      dashboard de Cloudflare: NO existe data-size="invisible" (valor
- *      invalido que impide que el reto ejecute).
- *   3. Turnstile resuelve y /api/verify-turnstile acepta: salida inmediata
- *      (webview IG: rebote a instagram://extbrowser/ con la MISMA URL para
- *      forzar el navegador externo, que repite alli el ciclo; navegador
- *      normal: destino directo).
- *   4. Todo lo demas es bot y se va a Wikipedia sin ver nada: error o
- *      expiracion del widget, success:false del backend, POST roto o
- *      silencio a los 6 s. No hay fallback comportamental ni reto visual.
- *   5. Los bots obvios por User-Agent ni siquiera reciben este HTML: el
- *      servidor los manda a Wikipedia con 302.
- *   6. Si a los 2 segundos de rebotar el esquema no hubiera funcionado (la
+ *   2. Cloudflare Turnstile (invisible) es un ACELERADOR, no un bloqueador.
+ *      Si resuelve y /api/verify-turnstile lo acepta: confianza alta,
+ *      salida inmediata SIN chequeo comportamental (webview IG: rebote a
+ *      instagram://extbrowser/ con la MISMA URL para forzar el navegador
+ *      externo, que repite alli el ciclo; navegador normal: destino).
+ *   3. Si Turnstile falla, duda, tarda mas de 6 s o nuestro backend no
+ *      responde: confianza media, caida graceful al chequeo
+ *      comportamental TRADICIONAL (el flujo original pre-Turnstile): POST
+ *      a /api/behavior-check con las senales pasivas y salida al destino.
+ *   4. Wikipedia solo en confianza baja: un rechazo EXPLICITO del
+ *      behavioral check (success:false). Los bots obvios por User-Agent
+ *      nunca llegan a esta pagina: el servidor los manda a Wikipedia con
+ *      302 antes de servir el HTML.
+ *   5. Si a los 2 segundos de rebotar el esquema no hubiera funcionado (la
  *      pagina sigue visible dentro del webview), se redirige al destino
  *      dentro del propio webview.
  */
@@ -53,15 +53,14 @@ export function generateBehavioralHTML(token, destino) {
     <!-- Unico elemento visible: el spinner mientras se procesa la salida -->
     <div class="spinner"></div>
 
-    <!-- Turnstile, puerta dura. La invisibilidad NO viene de ningun
-         atributo: data-size solo acepta normal/flexible/compact y un valor
-         invalido (como "invisible") impide que el reto ejecute. Para
-         garantizar que nunca se vea interfaz alguna, el widget debe ser de
-         tipo Invisible en el dashboard de Cloudflare; appearance
-         interaction-only es el cinturon de seguridad si llegase a ser
-         Managed. Los callbacks deben existir en window ANTES de que cargue
-         el script de CF, al final del body. -->
-    <div class="cf-turnstile" data-sitekey="${TURNSTILE_SITE_KEY}" data-callback="onTurnstileSuccess" data-error-callback="onTurnstileError" data-expired-callback="onTurnstileError" data-appearance="interaction-only"></div>
+    <!-- Turnstile. OJO: data-size solo acepta normal/flexible/compact; un
+         valor invalido (como "invisible") impide que el reto ejecute. La
+         invisibilidad real se configura creando el widget de tipo Invisible
+         en el dashboard de Cloudflare. Si el widget es Managed,
+         appearance=interaction-only lo mantiene fuera de la vista salvo que
+         exija interaccion del visitante. Los callbacks deben existir en
+         window ANTES de que cargue el script de CF, al final del body. -->
+    <div class="cf-turnstile" data-sitekey="${TURNSTILE_SITE_KEY}" data-callback="onTurnstileSuccess" data-error-callback="onTurnstileError" data-timeout-callback="onTurnstileError" data-appearance="interaction-only"></div>
 
     <script>
         (function () {
@@ -69,6 +68,13 @@ export function generateBehavioralHTML(token, destino) {
             const destino = "${enJs(destino)}";
             const WIKIPEDIA = 'https://en.wikipedia.org/wiki/Shinka';
             const ua = navigator.userAgent.toLowerCase();
+
+            // --- Senales pasivas que alimentan el chequeo del servidor ---
+            let mouseMoved = false;
+            let hasScrolled = false;
+            window.addEventListener('mousemove', function () { mouseMoved = true; }, { once: true, passive: true });
+            window.addEventListener('touchmove', function () { mouseMoved = true; }, { once: true, passive: true });
+            window.addEventListener('scroll', function () { hasScrolled = true; }, { once: true, passive: true });
 
             const esWebviewInstagram = ua.indexOf('instagram') !== -1 &&
                 /iphone|ipad|ipod|android|mobile/.test(ua);
@@ -109,13 +115,66 @@ export function generateBehavioralHTML(token, destino) {
                 }
             }
 
-            // PUERTA DURA: 6 s sin veredicto (script bloqueado por un
-            // adblock, red muy lenta, entorno automatizado sin retos) es
-            // bot: Wikipedia. Son 6 s y no 3 porque en 3G la primera carga
-            // de api.js puede superar los 3 s y un humano lento no merece
-            // Wikipedia; para apretar, cambiar solo este numero.
+            // --- Confianza MEDIA: chequeo comportamental TRADICIONAL ---
+            // Flujo original pre-Turnstile: enviar las senales pasivas al
+            // backend (que registra isHuman en redis para analisis) y salir
+            // al destino. La telemetria nunca bloquea a un humano real:
+            // solo un rechazo EXPLICITO del backend (success === false)
+            // manda a Wikipedia. Un isHuman:false NO bloquea: en una pagina
+            // de spinner que dura <1 s, un humano movil tipico no mueve
+            // raton ni hace scroll.
+            async function runBehavioralCheckTradicional() {
+                if (flujoIniciado) return;
+                flujoIniciado = true;
+
+                let veredicto = null;
+                try {
+                    const respuesta = await Promise.race([
+                        fetch('/api/behavior-check', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                token: token,
+                                mouseMoved: mouseMoved,
+                                hasScrolled: hasScrolled,
+                                screenWidth: window.screen ? window.screen.width : 0,
+                                screenHeight: window.screen ? window.screen.height : 0
+                            }),
+                            keepalive: true
+                        }),
+                        // El POST no puede bloquear la salida mas de 1.5 s
+                        new Promise(function (resolver) {
+                            setTimeout(function () { resolver(null); }, 1500);
+                        })
+                    ]);
+                    if (respuesta) {
+                        try { veredicto = await respuesta.json(); } catch (e) { }
+                    }
+                } catch (e) {
+                    // Red rota o JSON invalido: asumir humano y salir
+                }
+
+                // Confianza BAJA: rechazo explicito -> Wikipedia
+                if (veredicto && veredicto.success === false) {
+                    aWikipedia();
+                    return;
+                }
+
+                if (esWebviewInstagram) {
+                    rebotarAExtbrowser();
+                } else {
+                    window.location.replace(destino);
+                }
+            }
+
+            // Turnstile acelera, no bloquea: si en 6 s no resolvio (script
+            // bloqueado, red lenta, entorno raro), caida graceful al
+            // chequeo tradicional en lugar de bloquear.
             const temporizadorTurnstile = setTimeout(function () {
-                if (!flujoIniciado) aWikipedia();
+                if (!flujoIniciado) {
+                    console.log('Turnstile: sin respuesta en 6 s, caida a behavioral check');
+                    runBehavioralCheckTradicional();
+                }
             }, 6000);
 
             // --- Verificacion del token de Turnstile contra el backend ---
@@ -138,29 +197,30 @@ export function generateBehavioralHTML(token, destino) {
                             flujoIniciado = true;
                             flujoRapido();
                         } else {
-                            // success:false: veredicto de bot o token
-                            // invalido. Sin segunda oportunidad.
-                            aWikipedia();
+                            console.log('Turnstile: dudoso o rechazado, fallback a behavioral check');
+                            runBehavioralCheckTradicional();
                         }
                     })
-                    .catch(function () {
-                        // POST roto o respuesta ilegible: sin veredicto
-                        // fiable no se deja pasar.
-                        aWikipedia();
+                    .catch(function (err) {
+                        console.log('Turnstile: error de verificacion, asumiendo humano');
+                        runBehavioralCheckTradicional();
                     });
 
                 // Cinturon de seguridad: el POST no puede colgar el flujo
                 setTimeout(function () {
-                    if (!flujoIniciado) aWikipedia();
+                    if (!flujoIniciado) {
+                        console.log('Turnstile: verificacion colgada, caida a behavioral check');
+                        runBehavioralCheckTradicional();
+                    }
                 }, 5000);
             };
 
-            // --- Cualquier fallo del widget (error o expiracion) es bot
-            // hasta que se demuestre lo contrario: Wikipedia directa,
-            // sin reto visual ni segunda oportunidad ---
+            // --- Errores del widget (dominio no configurado, script
+            // bloqueado, red): degradacion INMEDIATA al chequeo
+            // tradicional en lugar de esperar el timer de 6 s ---
             window.onTurnstileError = function (codigo) {
-                console.log('Turnstile: error ' + codigo + ' -> Wikipedia');
-                aWikipedia();
+                console.log('Turnstile: error ' + codigo + ', caida a behavioral check');
+                runBehavioralCheckTradicional();
             };
 
         })();
