@@ -3,25 +3,24 @@
  * de la bio y el destino final. No tiene ningun elemento con el que
  * interactuar: solo un spinner mientras se procesa la salida.
  *
- * Flujo disenado:
+ * Flujo disenado (jerarquia de confianza, de mayor a menor):
  *   1. Toque del enlace dentro de Instagram -> abre el webview integrado.
- *   2. Cloudflare Turnstile (invisible) se ejecuta en la propia pagina y su
- *      token se envia a /api/verify-turnstile. NADA ocurre antes de esa
- *      verificacion: ni el rebote instagram://extbrowser/ ni el chequeo
- *      comportamental. Si Turnstile no resuelve en 6 s, o el backend
- *      rechaza el token, el visitante no es un navegador humano normal
- *      -> https://en.wikipedia.org/wiki/Shinka
- *   3. Verificado: si el UA es el webview de Instagram, se redirige al
- *      esquema instagram://extbrowser/ con la MISMA URL: eso fuerza la
- *      apertura del navegador externo (Safari/Chrome), que vuelve a pedir
- *      esta pagina (y repite alli el mismo Turnstile).
- *   4. Ya en el navegador externo el UA ya no contiene "Instagram":
- *      verificado de nuevo, se ejecuta el chequeo comportamental (POST a
- *      /api/behavior-check con el token de sesion) y se redirige al
- *      destino final.
+ *   2. Cloudflare Turnstile (invisible) es un ACELERADOR, no un bloqueador.
+ *      Si resuelve y /api/verify-turnstile lo acepta: confianza alta,
+ *      salida inmediata SIN chequeo comportamental (webview IG: rebote a
+ *      instagram://extbrowser/ con la MISMA URL para forzar el navegador
+ *      externo, que repite alli el ciclo; navegador normal: destino).
+ *   3. Si Turnstile falla, duda, tarda mas de 6 s o nuestro backend no
+ *      responde: confianza media, caida graceful al chequeo
+ *      comportamental TRADICIONAL (el flujo original pre-Turnstile): POST
+ *      a /api/behavior-check con las senales pasivas y salida al destino.
+ *   4. Wikipedia solo en confianza baja: un rechazo EXPLICITO del
+ *      behavioral check (success:false). Los bots obvios por User-Agent
+ *      nunca llegan a esta pagina: el servidor los manda a Wikipedia con
+ *      302 antes de servir el HTML.
  *   5. Si a los 2 segundos de rebotar el esquema no hubiera funcionado (la
- *      pagina sigue visible dentro del webview), se hace ese mismo chequeo
- *      y se redirige al destino dentro del propio webview.
+ *      pagina sigue visible dentro del webview), se redirige al destino
+ *      dentro del propio webview.
  */
 
 // Sitekey publica de Turnstile (es un valor publico por diseno). Se puede
@@ -75,59 +74,57 @@ export function generateBehavioralHTML(token, destino) {
             const esWebviewInstagram = ua.indexOf('instagram') !== -1 &&
                 /iphone|ipad|ipod|android|mobile/.test(ua);
 
-            let verificado = false;
-            let flujoIniciado = false;
+            let verificado = false;      // Turnstile ya dio su veredicto
+            let flujoIniciado = false;   // ya se salio por algun camino
 
             function aWikipedia() {
                 window.location.replace(WIKIPEDIA);
             }
 
-            // Turnstile debe resolver rapido (~100 ms una vez cargado el
-            // reto). Si en 6 s no hay verificacion exitosa (script
-            // bloqueado, headless sin retos, red rota), no es un navegador
-            // humano normal -> Wikipedia.
-            const temporizadorTurnstile = setTimeout(function () {
-                aWikipedia();
-            }, 6000);
+            // --- Rebote al navegador externo (webview de Instagram) ---
+            function rebotarAExtbrowser() {
+                // Si el esquema funciona, el navegador externo se abre y esta
+                // pagina pasa a segundo plano: eso es el exito, no un fallo.
+                let salioDeLaPagina = false;
+                document.addEventListener('visibilitychange', function () {
+                    if (document.hidden) salioDeLaPagina = true;
+                });
+                window.addEventListener('pagehide', function () { salioDeLaPagina = true; });
 
-            // --- Verificacion del token de Turnstile contra el backend ---
-            // Debe ser global: Turnstile invoca por nombre a data-callback.
-            window.onTurnstileSuccess = function (tokenTurnstile) {
-                if (verificado) return;
-                verificado = true;
-                clearTimeout(temporizadorTurnstile);
+                window.location.href = 'instagram://extbrowser/?url=' + encodeURIComponent(window.location.href);
 
-                fetch('/api/verify-turnstile', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ token: tokenTurnstile }),
-                    keepalive: true
-                })
-                    .then(function (r) { return r.json(); })
-                    .then(function (d) {
-                        if (d && d.success === true) {
-                            flujoAprobado();
-                        } else {
-                            aWikipedia();
-                        }
-                    })
-                    .catch(function () {
-                        // Red rota o JSON invalido: entorno raro -> bot
-                        aWikipedia();
-                    });
-
-                // Cinturon de seguridad: el POST no puede colgar el flujo
+                // Fallback: si a los 2 s seguimos visibles, el esquema no
+                // funciono -> destino directo dentro del propio webview
                 setTimeout(function () {
-                    if (!flujoIniciado) aWikipedia();
-                }, 5000);
-            };
+                    if (!salioDeLaPagina) window.location.replace(destino);
+                }, 2000);
+            }
 
-            // --- Chequeo comportamental y salida al destino final ---
-            async function pasarChequeoYRedirigir() {
+            // --- Confianza ALTA: Turnstile confirmo humano -> flujo rapido ---
+            function flujoRapido() {
+                console.log('Turnstile: humano confirmado, flujo rapido');
+                if (esWebviewInstagram) {
+                    rebotarAExtbrowser();
+                } else {
+                    window.location.replace(destino);
+                }
+            }
+
+            // --- Confianza MEDIA: chequeo comportamental TRADICIONAL ---
+            // Flujo original pre-Turnstile: enviar las senales pasivas al
+            // backend (que registra isHuman en redis para analisis) y salir
+            // al destino. La telemetria nunca bloquea a un humano real:
+            // solo un rechazo EXPLICITO del backend (success === false)
+            // manda a Wikipedia. Un isHuman:false NO bloquea: en una pagina
+            // de spinner que dura <1 s, un humano movil tipico no mueve
+            // raton ni hace scroll.
+            async function runBehavioralCheckTradicional() {
+                if (flujoIniciado) return;
                 flujoIniciado = true;
+
+                let veredicto = null;
                 try {
-                    // El POST no puede bloquear la salida mas de 1.5 s
-                    await Promise.race([
+                    const respuesta = await Promise.race([
                         fetch('/api/behavior-check', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -140,39 +137,79 @@ export function generateBehavioralHTML(token, destino) {
                             }),
                             keepalive: true
                         }),
-                        new Promise(function (resolver) { setTimeout(resolver, 1500); })
+                        // El POST no puede bloquear la salida mas de 1.5 s
+                        new Promise(function (resolver) {
+                            setTimeout(function () { resolver(null); }, 1500);
+                        })
                     ]);
+                    if (respuesta) {
+                        try { veredicto = await respuesta.json(); } catch (e) { }
+                    }
                 } catch (e) {
-                    // El chequeo nunca debe impedir la redireccion
+                    // Red rota o JSON invalido: asumir humano y salir
                 }
-                window.location.replace(destino);
-            }
 
-            // --- Flujo una vez que Turnstile ha verificado al visitante ---
-            function flujoAprobado() {
-                if (!esWebviewInstagram) {
-                    // Navegador externo: chequeo normal y salida
-                    pasarChequeoYRedirigir();
+                // Confianza BAJA: rechazo explicito -> Wikipedia
+                if (veredicto && veredicto.success === false) {
+                    aWikipedia();
                     return;
                 }
 
-                // Si el esquema funciona, el navegador externo se abre y esta
-                // pagina pasa a segundo plano: eso es el exito, no un fallo.
-                let salioDeLaPagina = false;
-                document.addEventListener('visibilitychange', function () {
-                    if (document.hidden) salioDeLaPagina = true;
-                });
-                window.addEventListener('pagehide', function () { salioDeLaPagina = true; });
-
-                // Rebote al navegador externo con la MISMA URL
-                window.location.href = 'instagram://extbrowser/?url=' + encodeURIComponent(window.location.href);
-
-                // Fallback: si a los 2 s seguimos visibles, el esquema no
-                // funciono -> chequeo normal y destino dentro del webview
-                setTimeout(function () {
-                    if (!salioDeLaPagina) pasarChequeoYRedirigir();
-                }, 2000);
+                if (esWebviewInstagram) {
+                    rebotarAExtbrowser();
+                } else {
+                    window.location.replace(destino);
+                }
             }
+
+            // Turnstile acelera, no bloquea: si en 6 s no resolvio (script
+            // bloqueado, red lenta, entorno raro), caida graceful al
+            // chequeo tradicional en lugar de bloquear.
+            const temporizadorTurnstile = setTimeout(function () {
+                if (!flujoIniciado) {
+                    console.log('Turnstile: sin respuesta en 6 s, caida a behavioral check');
+                    runBehavioralCheckTradicional();
+                }
+            }, 6000);
+
+            // --- Verificacion del token de Turnstile contra el backend ---
+            // Debe ser global: Turnstile invoca por nombre a data-callback.
+            window.onTurnstileSuccess = function (tokenTurnstile) {
+                if (verificado || flujoIniciado) return;
+                verificado = true;
+                clearTimeout(temporizadorTurnstile);
+
+                fetch('/api/verify-turnstile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: tokenTurnstile }),
+                    keepalive: true
+                })
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) {
+                        if (d && d.success === true) {
+                            if (flujoIniciado) return;
+                            flujoIniciado = true;
+                            flujoRapido();
+                        } else {
+                            console.log('Turnstile: dudoso o rechazado, fallback a behavioral check');
+                            runBehavioralCheckTradicional();
+                        }
+                    })
+                    .catch(function (err) {
+                        console.log('Turnstile: error de verificacion, asumiendo humano');
+                        runBehavioralCheckTradicional();
+                    });
+
+                // Cinturon de seguridad: el POST no puede colgar el flujo
+                setTimeout(function () {
+                    if (!flujoIniciado) {
+                        console.log('Turnstile: verificacion colgada, caida a behavioral check');
+                        runBehavioralCheckTradicional();
+                    }
+                }, 5000);
+            };
+
         })();
     </script>
 
