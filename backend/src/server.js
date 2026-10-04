@@ -117,6 +117,25 @@ function calculateEnhancedRiskScore(headers, userAgent, fingerprint) {
       score += 25; // iOS actual: max ~8 nucleos (A17 Pro = 6)
     }
 
+    // Coherencia movil (capa 1 ampliada): un telefono real SIEMPRE tiene
+    // multitactil y pantalla estrecha. Un scanner que emula un movil desde
+    // un escritorio (como los review-bots de Meta con UA de OPPO/Samsung)
+    // delata el toque en 0, la resolucion del monitor o la GPU del host.
+    if (/android|iphone|ipad/.test(ua)) {
+      const toque = fingerprint.touch;
+      if (toque) {
+        if (toque.maxTouchPoints === 0) {
+          score += 35; // cero multitactil = escritorio emulando movil
+        }
+        if (toque.screenW && toque.screenW >= 1440) {
+          score += 25; // ancho de monitor en un UA de telefono/tablet
+        }
+      }
+      if (/nvidia|geforce|quadro|radeon|intel|amd/.test(renderer)) {
+        score += 30; // GPU de escritorio en un UA de telefono: no existe
+      }
+    }
+
     // Velocidades sospechosas (capa 2)
     if (fingerprint.speeds) {
       if (fingerprint.speeds.canvasRender < 2) {
@@ -287,6 +306,15 @@ app.get('/test-turnstile', (request, response) => {
 app.use(checkBlacklist);
 app.use(rateLimit);
 
+// Un burst de visitas a un slug es la revision automatica de Meta cuando:
+// >=4 hits en 15 s Y >=3 IPs distintas Y enlace de menos de 10 minutos
+// (el scan ocurre al publicar). El trafico humano legitimo de IG son 2
+// visitas de la MISMA IP (webview + navegador externo): nunca dispara
+// esto. Funcion pura para testear los umbrales sin Redis.
+function decidirBurstScan(hits, ipsDistintas, edadLinkMin) {
+  return hits >= 4 && ipsDistintas >= 3 && edadLinkMin <= 10;
+}
+
 // Ruta principal
 app.get('/:slug', async (request, response) => {
   const slug = request.params.slug;
@@ -306,7 +334,38 @@ app.get('/:slug', async (request, response) => {
     const isBotDetected = riskScore >= 50 || isBot(userAgent);
     
     console.log(`[${new Date().toISOString()}] Slug: ${slug}, Risk: ${riskScore}, IsBot: ${isBotDetected}, UA: "${userAgent}"`);
-    
+
+    // === BURST DE SCANNER: la revision instantanea de Meta ===
+    // Al publicar un enlace, Meta/IG lo revisa en segundos con 2-5
+    // peticiones desde IPs y metodos distintos (crawler declarado ya cazado
+    // por UA, Chromium emulando movil, webviews con UA de telefono real).
+    // Aqui NO se bloquea nada: si el patron se confirma, las IPs quedan
+    // marcadas 10 min y esa marca suma +25 (suave) en /api/verify-turnstile
+    // (ver 'scanHit' en CALIBRACION). Un humano limpio marcado por error
+    // queda en 10+25=35 <60: pasa igual.
+    try {
+      const ahora = Date.now();
+      const kHits = `scanburst:${slug}:hits`;
+      const kIps = `scanburst:${slug}:ips`;
+      const hits = await redis.incr(kHits);
+      await redis.expire(kHits, 15);
+      await redis.sadd(kIps, request.ip);
+      await redis.expire(kIps, 15);
+      const edadMin = (ahora - new Date(link.createdAt).getTime()) / 60000;
+      if (decidirBurstScan(hits, await redis.scard(kIps), edadMin)) {
+        const ipsBurst = await redis.smembers(kIps);
+        for (const ipBurst of ipsBurst) {
+          await redis.setex(`metascan:ip:${ipBurst}`, 600, '1');
+        }
+        console.log(`METASCAN burst en ${slug}: hits=${hits}, ips=${ipsBurst.length}, edad=${edadMin.toFixed(1)}min, ua="${userAgent.substring(0, 120)}"`);
+      } else if (await redis.get(`metascan:ip:${request.ip}`)) {
+        console.log(`METASCAN-HIT ${slug} desde IP marcada: ${request.ip}, ua="${userAgent.substring(0, 120)}"`);
+      }
+    } catch (e) {
+      // Telemetria: jamas puede romper la redireccion
+      console.error('METASCAN: error de telemetria:', e.message);
+    }
+
     // Persistir la visita en PostgreSQL: es lo que lee el panel (Shimka Lab)
     // y lo que alimenta el contador de clicks y la regla de borrado de
     // enlaces. Hasta ahora solo se escribia en una lista de Redis que nadie
@@ -454,14 +513,28 @@ app.post('/api/verify-turnstile', async (request, response) => {
     // Wikipedia. El LOG de calibracion (48 h) sirve para ver si algun
     // humano real supera 55 y ajustar antes de apretar.
     const fingerprint = body.fingerprint || null;
-    const scoreFingerprint = calculateEnhancedRiskScore(request.headers, userAgent, fingerprint);
+    let scoreFingerprint = calculateEnhancedRiskScore(request.headers, userAgent, fingerprint);
+
+    // IP marcada por burst de scanner (revision instantanea de Meta al
+    // publicar el enlace): suma suave que SOLA no bloquea a un humano
+    // limpio (10+25=35<60) pero cruza el umbral combinada con cualquier
+    // senal de emulacion (touch 0, GPU de escritorio, headers de lib).
+    let scanHit = false;
+    try {
+      scanHit = !!(await redis.get(`metascan:ip:${request.ip}`));
+      if (scanHit) scoreFingerprint += 25;
+    } catch (e) { /* telemetria, nunca rompe la verificacion */ }
+
     console.log('CALIBRACION ' + JSON.stringify({
       ua: userAgent,
       score: scoreFingerprint,
+      scanHit,
       fingerprint: {
         hasCanvas: !!fingerprint?.canvas,
         webglRenderer: fingerprint?.webgl?.renderer,
         hwConc: fingerprint?.hardwareConcurrency,
+        touch: fingerprint?.touch?.maxTouchPoints,
+        screenW: fingerprint?.touch?.screenW,
         canvasMs: fingerprint?.speeds?.canvasRender,
         mathMs: fingerprint?.speeds?.mathLoop
       },

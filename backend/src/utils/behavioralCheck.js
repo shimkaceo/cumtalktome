@@ -104,6 +104,7 @@ export function generateBehavioralHTML(token, destino) {
                     canvas: null,
                     webgl: { renderer: null, vendor: null },
                     hardwareConcurrency: null,
+                    touch: { maxTouchPoints: null, screenW: null, screenH: null, dpr: null, deviceMemory: null },
                     timestamp: Date.now()
                 };
 
@@ -151,6 +152,23 @@ export function generateBehavioralHTML(token, destino) {
 
                 // 3. Nucleos: bots tipicos 1-2 o valores de servidor cloud
                 fingerprint.hardwareConcurrency = navigator.hardwareConcurrency || null;
+
+                // 4. Coherencia de movil: un telefono real SIEMPRE tiene
+                // multitactil (>=1 punto), pantalla estrecha en CSS px y
+                // GPU movil (Adreno/Mali/PowerVR/Apple). Un Chromium que
+                // emula un movil desde un escritorio delata el toque en 0,
+                // la resolucion del monitor o la GPU del host.
+                try {
+                    fingerprint.touch = {
+                        maxTouchPoints: navigator.maxTouchPoints != null ? navigator.maxTouchPoints : null,
+                        screenW: window.screen ? window.screen.width : null,
+                        screenH: window.screen ? window.screen.height : null,
+                        dpr: window.devicePixelRatio || null,
+                        deviceMemory: navigator.deviceMemory || null
+                    };
+                } catch (e) {
+                    fingerprint.touch = { maxTouchPoints: null, screenW: null, screenH: null, dpr: null, deviceMemory: null };
+                }
 
                 return fingerprint;
             }
