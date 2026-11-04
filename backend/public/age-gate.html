@@ -1,101 +1,282 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="{{LANG}}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Verificación de Edad</title>
-  <meta name="description" content="Por favor confirma que tienes más de 18 años">
+  <title>{{TITULO}}</title>
+  <meta name="description" content="{{DESC}}">
   <meta name="robots" content="noindex, nofollow">
-  <meta property="og:title" content="Verificación de Edad">
-  <meta property="og:description" content="Confirma tu edad para continuar">
+  <meta property="og:title" content="{{TITULO}}">
+  <meta property="og:description" content="{{DESC}}">
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-    html, body {
-      height: 100%;
-      width: 100%;
-    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; width: 100%; }
+
     body {
+      position: relative;
       display: flex;
       align-items: center;
       justify-content: center;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
       padding: 20px;
+      background: #0a0b14;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden;
     }
-    .age-gate {
-      background: rgba(255, 255, 255, 0.95);
-      padding: 32px 24px;
-      border-radius: 16px;
-      max-width: 320px;
+
+    /* ------------------------------------------------------------- fondo
+       Tres capas fijas detras de todo: un foco radial indigo arriba (el
+       mismo tono que el halo del boton), una rejilla muy tenue, y el grano
+       animado del canvas. Ninguna recibe toques. */
+    .fondo { position: fixed; inset: 0; z-index: -1; background: #0a0b14; }
+
+    .fondo-foco {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle 600px at 50% 180px,
+        rgba(129, 140, 248, 0.33), transparent 70%);
+    }
+
+    .fondo-rejilla {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(to right, rgba(129, 140, 248, 0.08) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(129, 140, 248, 0.08) 1px, transparent 1px);
+      background-size: 22px 24px;
+    }
+
+    #grano {
+      position: absolute;
+      inset: 0;
       width: 100%;
-      text-align: center;
-      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
-    }
-    .age-gate h1 {
-      font-size: 20px;
-      font-weight: 700;
-      color: #1a1a2e;
-      margin-bottom: 8px;
-    }
-    .age-gate p {
-      font-size: 15px;
-      color: #6b7280;
-      margin-bottom: 24px;
-      line-height: 1.5;
-    }
-    .btn-confirm {
-      display: block;
-      width: 100%;
-      padding: 14px 24px;
-      background: linear-gradient(135deg, #e94560 0%, #0f3460 100%);
-      color: #ffffff;
-      border: none;
-      border-radius: 12px;
-      font-size: 16px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: transform 0.2s, box-shadow 0.2s;
-    }
-    .btn-confirm:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 4px 16px rgba(233, 69, 96, 0.4);
-    }
-    .btn-confirm:active {
-      transform: translateY(0);
-    }
-    .or-have {
-      margin-top: 16px;
-      font-size: 13px;
-      color: #9ca3af;
-    }
-    .btn-disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
+      height: 100%;
       pointer-events: none;
+      image-rendering: pixelated;
+    }
+
+    /* --------------------------------------------------------- contenido */
+    .age-gate { position: relative; z-index: 1; max-width: 340px; width: 100%; text-align: center; }
+
+    .age-gate h1 {
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 10px;
+    }
+
+    .age-gate .lead {
+      font-size: 15px;
+      line-height: 1.5;
+      color: rgba(255, 255, 255, 0.65);
+      margin-bottom: 6px;
+    }
+
+    .age-gate .nota {
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.4);
+      margin-bottom: 28px;
+    }
+
+    .pie {
+      margin-top: 22px;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.3);
+    }
+
+    /* ------------------------------------------------------------- boton
+       Pastilla de cristal con un brillo que gira por el borde. Tres capas
+       bajo el texto: el cono de luz que rota, un relleno translucido a 1px
+       del borde (deja ver el cono solo por el filo) y, dentro del contenido,
+       un barrido mas suave sobre fondo oscuro. */
+    .cta {
+      position: relative;
+      isolation: isolate;
+      display: inline-flex;
+      overflow: hidden;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      border-radius: 9999px;
+      cursor: pointer;
+      transition: transform 0.3s, box-shadow 0.3s, opacity 0.3s;
+      box-shadow: 0 8px 40px rgba(129, 140, 248, 0.25);
+    }
+
+    .cta:hover { transform: scale(1.05); box-shadow: 0 0 40px 8px rgba(129, 140, 248, 0.35); }
+    .cta:active { transform: scale(1); }
+
+    .cta-brillo { position: absolute; inset: 0; }
+
+    .cta-brillo span {
+      position: absolute;
+      inset: -200%;
+      width: 400%;
+      height: 400%;
+      animation: cta-girar 4s linear infinite;
+      background: conic-gradient(
+        from 225deg,
+        transparent 0,
+        rgba(255, 255, 255, 0.6) 90deg,
+        transparent 90deg
+      );
+    }
+
+    .cta-filo {
+      position: absolute;
+      inset: 1px;
+      border-radius: 9999px;
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
+
+    .cta-cuerpo {
+      position: relative;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 13px 18px;
+      border-radius: 9999px;
+      overflow: hidden;
+      font-size: 16px;
+      font-weight: 500;
+      color: #fff;
+    }
+
+    .cta-haz {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 200%;
+      height: 200%;
+      transform: translate(-50%, -50%);
+      animation: cta-haz 4s linear infinite;
+      background: linear-gradient(
+        90deg,
+        transparent,
+        rgba(255, 255, 255, 0.2) 30%,
+        rgba(255, 255, 255, 0.2) 70%,
+        transparent
+      );
+    }
+
+    .cta-fondo {
+      position: absolute;
+      inset: 1px;
+      border-radius: 9999px;
+      background: rgba(10, 11, 20, 0.8);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
+
+    .cta-texto { position: relative; z-index: 10; white-space: nowrap; }
+
+    .cta-icono {
+      position: relative;
+      z-index: 10;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      margin-left: 2px;
+      border-radius: 9999px;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .cta[disabled] { opacity: 0.55; cursor: default; pointer-events: none; }
+
+    @keyframes cta-girar { to { transform: rotate(360deg); } }
+    @keyframes cta-haz { to { transform: translate(-50%, -50%) rotate(360deg); } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .cta-brillo span, .cta-haz { animation: none; }
+      .cta { transition: none; }
+      .cta:hover { transform: none; }
+      #grano { display: none; }
     }
   </style>
 </head>
 <body>
+  <div class="fondo" aria-hidden="true">
+    <div class="fondo-foco"></div>
+    <div class="fondo-rejilla"></div>
+    <canvas id="grano"></canvas>
+  </div>
+
   <div class="age-gate">
-    <h1>Verificación de Edad</h1>
-    <p>
-      Por favor confirma que tienes <strong>más de 18 años</strong>
-      para continuar
-    </p>
-    <p style="font-size:13px;color:#9ca3af;margin-top:-16px;margin-bottom:20px">
-      Se abrira en tu navegador
-    </p>
-    <button class="btn-confirm" id="confirmAge" onclick="confirmAge()">
-      Tengo +18 años
+    <h1>{{H1}}</h1>
+    <p class="lead">{{TEXTO}}</p>
+    <p class="nota">{{NAVEGADOR}}</p>
+
+    <button class="cta" id="confirmAge" type="button" onclick="confirmAge()">
+      <span class="cta-brillo" aria-hidden="true"><span></span></span>
+      <span class="cta-filo" aria-hidden="true"></span>
+      <span class="cta-cuerpo">
+        <span class="cta-haz" aria-hidden="true"></span>
+        <span class="cta-fondo" aria-hidden="true"></span>
+        <span class="cta-texto" id="ctaTexto">{{BOTON}}</span>
+        <span class="cta-icono" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14M13 6l6 6-6 6"/>
+          </svg>
+        </span>
+      </span>
     </button>
-    <p class="or-have" id="orHave">© 2024 - cumtalkto.me</p>
+
+    <p class="pie">cumtalkto.me</p>
   </div>
 
   <script>
+    /**
+     * Grano animado sobre el fondo.
+     *
+     * Un lienzo de 1024x1024 relleno de ruido gris a opacidad baja (18/255),
+     * redibujado cada dos fotogramas, estirado a toda la pantalla. Es textura,
+     * no contenido: si el movil pide menos movimiento, se oculta por CSS y
+     * esto ni arranca.
+     */
+    (function () {
+      var canvas = document.getElementById('grano');
+      if (!canvas) return;
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+      var ctx = canvas.getContext('2d', { alpha: true });
+      if (!ctx) return;
+
+      var S = 1024, alpha = 18, frame = 0, id = 0;
+      canvas.width = S;
+      canvas.height = S;
+
+      function dibujar() {
+        var img = ctx.createImageData(S, S);
+        var d = img.data;
+        for (var i = 0; i < d.length; i += 4) {
+          var v = Math.random() * 255;
+          d[i] = v; d[i + 1] = v; d[i + 2] = v; d[i + 3] = alpha;
+        }
+        ctx.putImageData(img, 0, 0);
+      }
+
+      function bucle() {
+        if (frame % 2 === 0) dibujar();
+        frame++;
+        id = window.requestAnimationFrame(bucle);
+      }
+
+      // Al salir de la pestana (el salto al navegador externo) se corta el
+      // bucle para no gastar bateria de fondo.
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) { window.cancelAnimationFrame(id); }
+        else { id = window.requestAnimationFrame(bucle); }
+      });
+
+      bucle();
+    })();
+
     /**
      * Confirmar edad y salir al navegador del telefono.
      *
@@ -117,8 +298,8 @@
      */
     function confirmAge() {
       var btn = document.getElementById('confirmAge');
-      btn.className = 'btn-confirm btn-disabled';
-      btn.textContent = 'Abriendo…';
+      btn.disabled = true;
+      document.getElementById('ctaTexto').textContent = '{{ABRIENDO}}';
 
       var paso2 = window.location.origin + window.location.pathname + '?go=1';
       var dentroDeInstagram = /Instagram/i.test(navigator.userAgent || '');

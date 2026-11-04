@@ -20,7 +20,101 @@ const app = new HyperExpress.Server({ trust_proxy: true });
  * Leerlo aqui quita esa pieza: si el fichero falta, el fallo sale una vez al
  * arrancar y se ve, en vez de en cada visita.
  */
-const AGE_GATE = fs.readFileSync(new URL('../public/age-gate.html', import.meta.url), 'utf8');
+const PLANTILLA_AGE_GATE = fs.readFileSync(
+  new URL('../public/age-gate.html', import.meta.url),
+  'utf8'
+);
+
+/**
+ * Los textos, por idioma.
+ *
+ * Anadir uno nuevo es anadir una entrada aqui y su codigo en IDIOMAS: la
+ * plantilla y la logica no se tocan. De momento solo hay dos.
+ */
+const TEXTOS = {
+  es: {
+    LANG: 'es',
+    TITULO: 'Verificación de edad',
+    DESC: 'Confirma que eres mayor de 18 años para continuar',
+    H1: 'Verificación de edad',
+    TEXTO: 'Confirma que tienes <strong>más de 18 años</strong> para continuar',
+    NAVEGADOR: 'Se abrirá en tu navegador',
+    BOTON: 'Tengo más de 18',
+    ABRIENDO: 'Abriendo…',
+    LLEVANDO: 'Te estamos llevando…',
+    CONTINUAR: 'Continuar'
+  },
+  en: {
+    LANG: 'en',
+    TITULO: 'Age verification',
+    DESC: 'Confirm you are over 18 to continue',
+    H1: 'Age verification',
+    TEXTO: 'Confirm you are <strong>over 18</strong> to continue',
+    NAVEGADOR: 'It will open in your browser',
+    BOTON: 'I am over 18',
+    ABRIENDO: 'Opening…',
+    LLEVANDO: 'Taking you there…',
+    CONTINUAR: 'Continue'
+  }
+};
+
+const IDIOMAS = Object.keys(TEXTOS);
+const POR_DEFECTO = 'en';
+
+// Paises donde el espanol es lengua oficial. Solo se usan si el navegador no
+// dice nada, que es raro.
+const PAISES_ES = new Set([
+  'ES', 'MX', 'CO', 'AR', 'PE', 'VE', 'CL', 'EC', 'GT', 'CU', 'BO', 'DO',
+  'HN', 'PY', 'SV', 'NI', 'CR', 'PA', 'UY', 'PR', 'GQ'
+]);
+
+/**
+ * Que idioma le toca a quien entra.
+ *
+ * Primero lo que pide el navegador, que es el unico dato que habla de la
+ * PERSONA: el idioma que lleva configurado en el movil. La IP solo dice desde
+ * donde se conecta —un colombiano en Madrid o un ingles en Mexico darian el
+ * idioma equivocado— asi que queda de respaldo, por si la cabecera no viene.
+ *
+ * Esto cambia las PALABRAS y nada mas. La pagina, el recorrido y el destino
+ * son los mismos para todo el mundo.
+ */
+function idiomaDe(request) {
+  // 1. Lo que pide el navegador: "es-ES,es;q=0.9,en;q=0.8"
+  const pedido = request.headers['accept-language'] || '';
+  const preferencias = pedido
+    .split(',')
+    .map((trozo) => {
+      const [etiqueta, q] = trozo.trim().split(';q=');
+      return { codigo: etiqueta.trim().slice(0, 2).toLowerCase(), peso: q ? parseFloat(q) : 1 };
+    })
+    .filter((p) => p.codigo)
+    .sort((a, b) => b.peso - a.peso);
+
+  const coincide = preferencias.find((p) => IDIOMAS.includes(p.codigo));
+  if (coincide) return coincide.codigo;
+
+  // 2. Respaldo: el pais, si algo delante lo informa.
+  const pais = (
+    request.headers['cf-ipcountry'] ||
+    request.headers['x-vercel-ip-country'] ||
+    request.headers['x-country-code'] ||
+    ''
+  ).toUpperCase();
+  if (PAISES_ES.has(pais)) return 'es';
+
+  return POR_DEFECTO;
+}
+
+/** Rellena la plantilla. Se hace una vez por idioma al arrancar, no por visita. */
+function pintarAgeGate(t) {
+  return Object.keys(t).reduce(
+    (html, hueco) => html.split(`{{${hueco}}}`).join(t[hueco]),
+    PLANTILLA_AGE_GATE
+  );
+}
+
+const AGE_GATE = Object.fromEntries(IDIOMAS.map((c) => [c, pintarAgeGate(TEXTOS[c])]));
 const prisma = new PrismaClient();
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
 
@@ -30,7 +124,9 @@ const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
 
 // Servir el age-gate suelto (por si se enlaza directo)
 app.get('/age-gate.html', (request, response) => {
-  response.header('Content-Type', 'text/html; charset=utf-8').send(AGE_GATE);
+  response
+    .header('Content-Type', 'text/html; charset=utf-8')
+    .send(AGE_GATE[idiomaDe(request)]);
 });
 
 // Get destination para age-gate - devuelve el link original
@@ -71,15 +167,15 @@ app.get('/api/get-destination', async (request, response) => {
  * hacen las apps al compartir un enlace— se queda en el age gate y nunca
  * pulsa el boton, asi que ya no infla los numeros del panel.
  */
-function paginaDeSalto(destino) {
+function paginaDeSalto(destino, t) {
   const dest = JSON.stringify(destino).replace(/</g, '\\u003c');
   return `<!DOCTYPE html>
-<html lang="es">
+<html lang="${t.LANG}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Un momento…</title>
+<title>${t.LLEVANDO}</title>
 <style>
   html,body{height:100%;margin:0}
   body{display:flex;align-items:center;justify-content:center;
@@ -96,8 +192,8 @@ function paginaDeSalto(destino) {
 <body>
   <div class="c">
     <div class="p"></div>
-    <p>Te estamos llevando…</p>
-    <noscript><p><a href="${destino}">Continuar</a></p></noscript>
+    <p>${t.LLEVANDO}</p>
+    <noscript><p><a href="${destino}">${t.CONTINUAR}</a></p></noscript>
   </div>
 <script>
   var destino = ${dest};
@@ -110,6 +206,8 @@ function paginaDeSalto(destino) {
 app.get('/:slug', async (request, response) => {
   const slug = request.params.slug;
   if (!slug) return response.status(400).json({ error: 'Missing slug' });
+
+  const idioma = idiomaDe(request);
 
   const variant = await prisma.linkVariant.findUnique({
     where: { slug },
@@ -136,14 +234,14 @@ app.get('/:slug', async (request, response) => {
     return response
       .header('Content-Type', 'text/html; charset=utf-8')
       .header('Cache-Control', 'no-store')
-      .send(paginaDeSalto(destino));
+      .send(paginaDeSalto(destino, TEXTOS[idioma]));
   }
 
   // Paso 1: age gate.
   return response
     .header('Content-Type', 'text/html; charset=utf-8')
     .header('Cache-Control', 'no-store')
-    .send(AGE_GATE);
+    .send(AGE_GATE[idioma]);
 });
 
 // Si Redis cae, ioredis reintenta la conexion en bucle: sin listener, cada
