@@ -189,6 +189,19 @@
 
     .cta[disabled] { opacity: 0.55; cursor: default; pointer-events: none; }
 
+    .seguir {
+      display: inline-block;
+      margin-top: 18px;
+      padding: 11px 22px;
+      border: 1px solid rgba(168, 85, 247, 0.5);
+      border-radius: 9999px;
+      color: #c084fc;
+      font-size: 15px;
+      font-weight: 500;
+      text-decoration: none;
+    }
+    .seguir[hidden] { display: none; }
+
     @keyframes cta-girar { to { transform: rotate(360deg); } }
     @keyframes cta-haz { to { transform: translate(-50%, -50%) rotate(360deg); } }
 
@@ -226,6 +239,8 @@
         </span>
       </span>
     </button>
+
+    <a class="seguir" id="seguir" href="#" hidden>{{CONTINUAR}}</a>
 
     <p class="pie">cumtalkto.me</p>
   </div>
@@ -304,22 +319,29 @@
       var paso2 = window.location.origin + window.location.pathname + '?go=1';
       var dentroDeInstagram = /Instagram/i.test(navigator.userAgent || '');
 
+      // Fuera de Instagram no hay nada que esquivar: sigue aqui mismo.
       if (!dentroDeInstagram) {
         window.location.replace(paso2);
         return;
       }
 
-      var salio = false;
-      document.addEventListener('visibilitychange', function () {
-        if (document.hidden) salio = true;
-      });
-      window.addEventListener('pagehide', function () { salio = true; });
-
+      // Dentro de Instagram: se le pide a la app que abra fuera y PUNTO. No se
+      // arma ninguna navegacion dentro del webview. Antes habia un respaldo a
+      // los 2 s que cargaba el destino dentro de Instagram "por si el salto
+      // fallaba" — pero Instagram no siempre avisa de que la pagina se fue a
+      // segundo plano, asi que ese respaldo saltaba aunque el salto hubiera
+      // funcionado y abria el destino TAMBIEN dentro. Por eso ya no existe.
       window.location.href = 'instagram://extbrowser/?url=' + encodeURIComponent(paso2);
 
+      // Si el salto no funciona, la pagina sigue a la vista. En vez de
+      // abrirlo dentro por su cuenta, se ofrece un enlace para que lo toque
+      // quien quiera. Asi dentro de Instagram no se abre nunca solo.
       setTimeout(function () {
-        if (!salio) window.location.replace(paso2);
-      }, 2000);
+        var seguir = document.getElementById('seguir');
+        seguir.href = paso2;
+        seguir.hidden = false;
+        btn.hidden = true;
+      }, 2500);
     }
   </script>
 </body>
