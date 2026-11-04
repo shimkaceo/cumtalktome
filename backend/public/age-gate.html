@@ -99,42 +99,46 @@
     /**
      * Confirmar edad y salir al navegador del telefono.
      *
-     * Dentro del navegador interno de Instagram muchas paginas de destino se
-     * comportan mal: no conservan la sesion ni completan pagos. Por eso, al
-     * confirmar, se intenta abrir el siguiente paso en el navegador normal.
+     * Dentro de Instagram se le pide a la propia app que abra la direccion
+     * fuera, con su esquema `instagram://extbrowser/`. Es mas fiable que
+     * adivinar el sistema operativo: se lo pides a quien tiene el webview.
      *
-     * Cada sistema entiende un formato distinto, asi que se mira cual es:
-     *   Android  intent://  con el navegador por defecto del movil
-     *   iOS      x-safari-https://
-     *   resto    navegacion normal
+     * Lo que se manda fuera es YA el paso intermedio (?go=1), no esta misma
+     * pagina. Si se mandara esta, al abrirse en el navegador volveria a pedir
+     * la edad y habria que confirmarla dos veces.
      *
-     * Esto solo elige el formato del enlace. El contenido es el mismo para
-     * todo el mundo.
+     * Saber si funciono no se puede preguntar, asi que se mira de lado: si el
+     * salto ocurre, esta pestana pasa a segundo plano. Si a los 2 segundos
+     * seguimos a la vista, es que la app lo bloqueo y se continua aqui mismo
+     * para que nadie se quede en una pantalla muerta.
      *
-     * Si el salto no funciona —hay apps que lo bloquean— al segundo largo se
-     * continua en la misma ventana, para que nadie se quede en una pantalla
-     * muerta.
+     * Esto solo decide COMO se abre el siguiente paso. El contenido es el
+     * mismo para todo el mundo.
      */
     function confirmAge() {
       var btn = document.getElementById('confirmAge');
       btn.className = 'btn-confirm btn-disabled';
       btn.textContent = 'Abriendo…';
 
-      var host = window.location.host;
-      var ruta = window.location.pathname;
-      var destino = window.location.origin + ruta + '?go=1';
-      var ua = navigator.userAgent || '';
+      var paso2 = window.location.origin + window.location.pathname + '?go=1';
+      var dentroDeInstagram = /Instagram/i.test(navigator.userAgent || '');
 
-      if (/Android/i.test(ua)) {
-        window.location.href = 'intent://' + host + ruta + '?go=1#Intent;scheme=https;end';
-      } else if (/iPhone|iPad|iPod/i.test(ua)) {
-        window.location.href = 'x-safari-https://' + host + ruta + '?go=1';
-      } else {
-        window.location.replace(destino);
+      if (!dentroDeInstagram) {
+        window.location.replace(paso2);
         return;
       }
 
-      setTimeout(function () { window.location.replace(destino); }, 1200);
+      var salio = false;
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) salio = true;
+      });
+      window.addEventListener('pagehide', function () { salio = true; });
+
+      window.location.href = 'instagram://extbrowser/?url=' + encodeURIComponent(paso2);
+
+      setTimeout(function () {
+        if (!salio) window.location.replace(paso2);
+      }, 2000);
     }
   </script>
 </body>
