@@ -173,29 +173,75 @@ function paginaDeSalto(destino, t) {
 <html lang="${t.LANG}">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="robots" content="noindex, nofollow">
 <title>${t.LLEVANDO}</title>
 <style>
-  html,body{height:100%;margin:0}
-  body{display:flex;align-items:center;justify-content:center;
-       background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);
-       color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
-  .c{text-align:center}
-  .p{width:34px;height:34px;margin:0 auto 14px;border:3px solid rgba(255,255,255,.25);
-     border-top-color:#e94560;border-radius:50%;animation:g .8s linear infinite}
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;width:100%}
+  body{position:relative;display:flex;align-items:center;justify-content:center;
+       background:#0a0b14;color:#fff;overflow:hidden;
+       font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+
+  /* mismo fondo que el age gate: foco indigo, rejilla y grano */
+  .fondo{position:fixed;inset:0;z-index:-1;background:#0a0b14}
+  .fondo-foco{position:absolute;inset:0;
+       background:radial-gradient(circle 600px at 50% 180px,rgba(168,85,247,.33),transparent 70%)}
+  .fondo-rejilla{position:absolute;inset:0;
+       background-image:linear-gradient(to right,rgba(168,85,247,.08) 1px,transparent 1px),
+                        linear-gradient(to bottom,rgba(168,85,247,.08) 1px,transparent 1px);
+       background-size:22px 24px}
+  #grano{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;image-rendering:pixelated}
+
+  .c{position:relative;z-index:1;text-align:center}
+  .p{width:36px;height:36px;margin:0 auto 16px;
+     border:3px solid rgba(168,85,247,.25);border-top-color:#a855f7;
+     border-radius:50%;animation:g .8s linear infinite;
+     box-shadow:0 0 24px rgba(168,85,247,.35)}
   @keyframes g{to{transform:rotate(360deg)}}
-  p{font-size:15px;opacity:.8;margin:0}
-  a{color:#e94560}
+  p{font-size:15px;color:rgba(255,255,255,.7);margin:0}
+  a{color:#a855f7}
+
+  @media (prefers-reduced-motion:reduce){
+    .p{animation:none}
+    #grano{display:none}
+  }
 </style>
 </head>
 <body>
-  <div class="c">
-    <div class="p"></div>
-    <p>${t.LLEVANDO}</p>
-    <noscript><p><a href="${destino}">${t.CONTINUAR}</a></p></noscript>
-  </div>
+<div class="fondo" aria-hidden="true">
+  <div class="fondo-foco"></div>
+  <div class="fondo-rejilla"></div>
+  <canvas id="grano"></canvas>
+</div>
+
+<div class="c">
+  <div class="p"></div>
+  <p>${t.LLEVANDO}</p>
+  <noscript><p><a href="${destino}">${t.CONTINUAR}</a></p></noscript>
+</div>
+
 <script>
+  (function () {
+    var canvas = document.getElementById('grano');
+    if (!canvas) return;
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    var ctx = canvas.getContext('2d', { alpha: true });
+    if (!ctx) return;
+    var S = 1024, alpha = 18, frame = 0, id = 0;
+    canvas.width = S; canvas.height = S;
+    function dibujar(){
+      var img = ctx.createImageData(S, S), d = img.data;
+      for (var i = 0; i < d.length; i += 4) {
+        var v = Math.random() * 255; d[i]=v; d[i+1]=v; d[i+2]=v; d[i+3]=alpha;
+      }
+      ctx.putImageData(img, 0, 0);
+    }
+    function bucle(){ if (frame % 2 === 0) dibujar(); frame++; id = requestAnimationFrame(bucle); }
+    bucle();
+  })();
+
   var destino = ${dest};
   setTimeout(function () { window.location.replace(destino); }, 1000);
 </script>
