@@ -1,11 +1,13 @@
 import HyperExpress from 'hyper-express';
 import { PrismaClient } from '@prisma/client';
 import Redis from 'ioredis';
+import { setup } from './scripts/index.js';
 import { checkBlacklist, logAccess } from './middleware/security.js';
 import { rateLimit } from './middleware/rateLimit.js';
-import { generateToken, validateToken } from './utils/tokens.js';
-import { generateBehavioralHTML, TURNSTILE_SITE_KEY } from './utils/behavioralCheck.js';
 import { botUserAgents, isBot } from './utils/botDetection.js';
+
+// Ejecutar setup inicial (copiar age-gate a dist)
+setup();
 
 // Railway termina el TLS/HTTP delante de la app: el IP del socket siempre es
 // un proxy interno (100.64.0.x) y cambia entre peticiones. Sin trust_proxy,
@@ -18,14 +20,67 @@ const app = new HyperExpress.Server({ trust_proxy: true });
 const prisma = new PrismaClient();
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
 
+// Bot detection desactivado temporalmente - solo queda JWT auth para admin
+
+// === AGE GATE ROUTES ===
+
+// Servir el age-gate HTML
+app.get('/age-gate.html', (request, response) => {
+  response.sendFile(process.cwd() + '/dist/age-gate.html');
+});
+
+// Get destination para age-gate - devuelve el link original
+app.get('/api/get-destination', async (request, response) => {
+  const slug = request.query.slug;
+  if (!slug) {
+    return response.status(400).json({ error: 'Missing slug' });
+  }
+
+  const variant = await prisma.linkVariant.findUnique({
+    where: { slug },
+    include: { influencer: true }
+  });
+
+  if (!variant) {
+    // Si no existe en la DB, no hacer redirect - dejar que la página maneje el caso
+    return response.json({ destination: null });
+  }
+
+  // Enviar al destino real del influencer
+  const destination = variant.influencer.urlDestino;
+  response.json({ destination });
+});
+
+// Direct redirect: /{slug} -> destino final (sin behavioral check ni bot detection)
+app.get('/:slug*', async (request, response) => {
+  const slug = request.params.slug;
+
+  if (!slug) {
+    return response.status(400).json({ error: 'Missing slug' });
+  }
+
+  const variant = await prisma.linkVariant.findUnique({
+    where: { slug },
+    include: { influencer: true }
+  });
+
+  if (!variant) {
+    return response.status(404).json({ error: 'Link not found' });
+  }
+
+  const destination = variant.influencer.urlDestino;
+
+  if (destination && destination.startsWith('http')) {
+    return response.redirect(destination);
+  } else {
+    return response.status(400).json({ error: 'Invalid destination URL' });
+  }
+});
+
 // Si Redis cae, ioredis reintenta la conexion en bucle: sin listener, cada
 // intento imprime el error sin control. Con el queda una linea por intento y
 // el servidor sigue sirviendo enlaces.
 redis.on('error', (error) => console.error(`Redis: ${error.message}`));
-
-// La deteccion de bots por User-Agent vive en utils/botDetection.js,
-// compartida con security.js y la ruta de diagnostico /test-bot para que
-// todos los componentes clasifiquen igual.
 
 function calculateRiskScore(headers, userAgent) {
   let score = 0;
@@ -581,10 +636,10 @@ app.post('/api/verify-turnstile', async (request, response) => {
 });
 
 app.get('/health', (request, response) => {
-  response.json({ status: 'ok', timestamp: new Date().toISOString() });
+  response.json({ status: 'ok', timestamp: new Date().toISOString(), botDetection: 'OFF' });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT)
-  .then(() => console.log(`Servidor en puerto ${PORT} | Bot detection: ON | Security: ON | Tokens: ON | Behavioral: ON`))
+  .then(() => console.log(`✓ Servidor en puerto ${PORT} | Bot detection: OFF | Age gate: ON | JWT: ON`))
   .catch((error) => console.error('Error:', error));
