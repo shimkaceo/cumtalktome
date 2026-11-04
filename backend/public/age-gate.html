@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Verificación de Edad</title>
+  <meta name="description" content="Por favor confirma que tienes más de 18 años">
+  <meta name="robots" content="noindex, nofollow">
+  <meta property="og:title" content="Verificación de Edad">
+  <meta property="og:description" content="Confirma tu edad para continuar">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    html, body {
+      height: 100%;
+      width: 100%;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      padding: 20px;
+    }
+    .age-gate {
+      background: rgba(255, 255, 255, 0.95);
+      padding: 32px 24px;
+      border-radius: 16px;
+      max-width: 320px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+    }
+    .age-gate h1 {
+      font-size: 20px;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-bottom: 8px;
+    }
+    .age-gate p {
+      font-size: 15px;
+      color: #6b7280;
+      margin-bottom: 24px;
+      line-height: 1.5;
+    }
+    .btn-confirm {
+      display: block;
+      width: 100%;
+      padding: 14px 24px;
+      background: linear-gradient(135deg, #e94560 0%, #0f3460 100%);
+      color: #ffffff;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .btn-confirm:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 16px rgba(233, 69, 96, 0.4);
+    }
+    .btn-confirm:active {
+      transform: translateY(0);
+    }
+    .or-have {
+      margin-top: 16px;
+      font-size: 13px;
+      color: #9ca3af;
+    }
+    .btn-disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="age-gate">
+    <h1>Verificación de Edad</h1>
+    <p>
+      Por favor confirma que tienes <strong>más de 18 años</strong>
+      para continuar
+    </p>
+    <p style="font-size:13px;color:#9ca3af;margin-top:-16px;margin-bottom:20px">
+      Se abrira en tu navegador
+    </p>
+    <button class="btn-confirm" id="confirmAge" onclick="confirmAge()">
+      Tengo +18 años
+    </button>
+    <p class="or-have" id="orHave">© 2024 - cumtalkto.me</p>
+  </div>
+
+  <script>
+    /**
+     * Confirmar edad y salir al navegador del telefono.
+     *
+     * Dentro del navegador interno de Instagram muchas paginas de destino se
+     * comportan mal: no conservan la sesion ni completan pagos. Por eso, al
+     * confirmar, se intenta abrir el siguiente paso en el navegador normal.
+     *
+     * Cada sistema entiende un formato distinto, asi que se mira cual es:
+     *   Android  intent://  con el navegador por defecto del movil
+     *   iOS      x-safari-https://
+     *   resto    navegacion normal
+     *
+     * Esto solo elige el formato del enlace. El contenido es el mismo para
+     * todo el mundo.
+     *
+     * Si el salto no funciona —hay apps que lo bloquean— al segundo largo se
+     * continua en la misma ventana, para que nadie se quede en una pantalla
+     * muerta.
+     */
+    function confirmAge() {
+      var btn = document.getElementById('confirmAge');
+      btn.className = 'btn-confirm btn-disabled';
+      btn.textContent = 'Abriendo…';
+
+      var host = window.location.host;
+      var ruta = window.location.pathname;
+      var destino = window.location.origin + ruta + '?go=1';
+      var ua = navigator.userAgent || '';
+
+      if (/Android/i.test(ua)) {
+        window.location.href = 'intent://' + host + ruta + '?go=1#Intent;scheme=https;end';
+      } else if (/iPhone|iPad|iPod/i.test(ua)) {
+        window.location.href = 'x-safari-https://' + host + ruta + '?go=1';
+      } else {
+        window.location.replace(destino);
+        return;
+      }
+
+      setTimeout(function () { window.location.replace(destino); }, 1200);
+    }
+  </script>
+</body>
+</html>
