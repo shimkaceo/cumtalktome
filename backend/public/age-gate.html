@@ -331,17 +331,27 @@
       // fallaba" — pero Instagram no siempre avisa de que la pagina se fue a
       // segundo plano, asi que ese respaldo saltaba aunque el salto hubiera
       // funcionado y abria el destino TAMBIEN dentro. Por eso ya no existe.
-      window.location.href = 'instagram://extbrowser/?url=' + encodeURIComponent(paso2);
+      saltarFuera(paso2);
 
-      // Si el salto no funciona, la pagina sigue a la vista. En vez de
-      // abrirlo dentro por su cuenta, se ofrece un enlace para que lo toque
-      // quien quiera. Asi dentro de Instagram no se abre nunca solo.
+      // Si el salto no prendio a la primera, la pagina sigue a la vista. Se
+      // ofrece un boton "Continuar" que VUELVE a intentar salir fuera — nunca
+      // carga el destino dentro del navegador de Instagram. La idea es que
+      // todo el recorrido ocurra fuera; dentro no se abre jamas solo.
       setTimeout(function () {
         var seguir = document.getElementById('seguir');
-        seguir.href = paso2;
         seguir.hidden = false;
         btn.hidden = true;
+        seguir.onclick = function (ev) {
+          ev.preventDefault();
+          saltarFuera(paso2);
+        };
       }, 2500);
+    }
+
+    // El salto al navegador del telefono. Se lo pide a la propia app de
+    // Instagram con su esquema; esto no navega el webview a ningun http.
+    function saltarFuera(url) {
+      window.location.href = 'instagram://extbrowser/?url=' + encodeURIComponent(url);
     }
   </script>
 </body>
