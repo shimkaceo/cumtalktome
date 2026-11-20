@@ -2,6 +2,7 @@ import HyperExpress from 'hyper-express';
 import { PrismaClient } from '@prisma/client';
 import Redis from 'ioredis';
 import fs from 'fs';
+import { createHash } from 'crypto';
 
 // Railway termina el TLS/HTTP delante de la app: el IP del socket siempre es
 // un proxy interno (100.64.0.x) y cambia entre peticiones. Sin trust_proxy,
@@ -117,6 +118,58 @@ function pintarAgeGate(t) {
 const AGE_GATE = Object.fromEntries(IDIOMAS.map((c) => [c, pintarAgeGate(TEXTOS[c])]));
 const prisma = new PrismaClient();
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+
+/**
+ * Clics unicos: una fila por enlace e IP.
+ *
+ * Es lo que se le paga a los clippers de Shimka Clips (lo lee su bot), asi que
+ * aqui un clic solo cuenta la PRIMERA vez que una IP pasa el age gate de ese
+ * enlace. `clickCount` sigue subiendo en cada visita como siempre: este conteo
+ * va aparte y no cambia nada de lo que ya habia.
+ *
+ * La IP no se guarda tal cual: se guarda su huella (sha256 con sal). Sirve para
+ * saber si ya se conto y no para saber quien es.
+ *
+ * La tabla se crea sola al arrancar (CREATE IF NOT EXISTS). Tambien esta en
+ * schema.prisma con la misma forma, para que un `prisma db push` no la borre.
+ */
+const SAL_CLICS = process.env.CLICS_SAL || 'shimka-clips';
+
+prisma
+  .$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "ClickUnico" (
+      "id"        TEXT NOT NULL,
+      "variantId" TEXT NOT NULL,
+      "ipHash"    TEXT NOT NULL,
+      "pais"      TEXT,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "ClickUnico_pkey" PRIMARY KEY ("id"),
+      CONSTRAINT "ClickUnico_variantId_fkey" FOREIGN KEY ("variantId")
+        REFERENCES "LinkVariant"("id") ON DELETE CASCADE ON UPDATE CASCADE
+    )`)
+  .then(() => prisma.$executeRawUnsafe(
+    `CREATE UNIQUE INDEX IF NOT EXISTS "ClickUnico_variantId_ipHash_key" ON "ClickUnico"("variantId", "ipHash")`))
+  .then(() => prisma.$executeRawUnsafe(
+    `CREATE INDEX IF NOT EXISTS "ClickUnico_createdAt_idx" ON "ClickUnico"("createdAt")`))
+  .then(() => console.log('✓ Tabla ClickUnico lista'))
+  .catch((e) => console.error(`ClickUnico: ${e.message}`));
+
+/** La IP real del visitante: la de Cloudflare si viene por el worker. */
+function ipDe(request) {
+  return request.headers['cf-connecting-ip'] || request.ip || '';
+}
+
+function registrarClicUnico(request, variantId) {
+  const ip = ipDe(request);
+  if (!ip) return;
+  const huella = createHash('sha256').update(`${SAL_CLICS}:${ip}`).digest('hex');
+  const pais = (request.headers['cf-ipcountry'] || '').slice(0, 2) || null;
+  prisma
+    .$executeRaw`INSERT INTO "ClickUnico" ("id", "variantId", "ipHash", "pais", "createdAt")
+                 VALUES (gen_random_uuid()::text, ${variantId}, ${huella}, ${pais}, now())
+                 ON CONFLICT ("variantId", "ipHash") DO NOTHING`
+    .catch((e) => console.error(`ClickUnico ${variantId}: ${e.message}`));
+}
 
 // Bot detection desactivado temporalmente - solo queda JWT auth para admin
 
@@ -276,6 +329,7 @@ app.get('/:slug', async (request, response) => {
     prisma.linkVariant
       .update({ where: { id: variant.id }, data: { clickCount: { increment: 1 } } })
       .catch((e) => console.error(`clickCount ${slug}: ${e.message}`));
+    registrarClicUnico(request, variant.id);
 
     return response
       .header('Content-Type', 'text/html; charset=utf-8')
