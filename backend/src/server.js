@@ -151,8 +151,32 @@ prisma
     `CREATE UNIQUE INDEX IF NOT EXISTS "ClickUnico_variantId_ipHash_key" ON "ClickUnico"("variantId", "ipHash")`))
   .then(() => prisma.$executeRawUnsafe(
     `CREATE INDEX IF NOT EXISTS "ClickUnico_createdAt_idx" ON "ClickUnico"("createdAt")`))
-  .then(() => console.log('✓ Tabla ClickUnico lista'))
+  .then(() => prisma.$executeRawUnsafe(
+    `ALTER TABLE "LinkVariant" ADD COLUMN IF NOT EXISTS "lastClickAt" TIMESTAMP(3)`))
+  .then(() => console.log('✓ Tabla ClickUnico y lastClickAt listas'))
   .catch((e) => console.error(`ClickUnico: ${e.message}`));
+
+/**
+ * Links caducados: los que llevan DIAS_SIN_CLICS dias sin un solo clic dejan de
+ * funcionar (quien los abra ve "no encontrado") y Shimka Lab los borra para
+ * siempre en su limpieza. Suele ser que la cuenta se cambio o que esa persona
+ * ya no trabaja con nosotros.
+ *
+ * "Ultima actividad" = el ultimo clic, o la creacion si nunca tuvo ninguno. Los
+ * clics no se apuntaban con fecha antes de INICIO_REGISTRO, asi que ningun link
+ * cuenta desde antes de ese dia: si no, todos los viejos caducarian de golpe.
+ */
+const DIAS_SIN_CLICS = Number(process.env.LINKS_DIAS_SIN_CLICS || 21);
+const INICIO_REGISTRO = new Date('2026-11-21T00:00:00Z');
+
+function caducado(variant) {
+  const ultima = Math.max(
+    new Date(variant.createdAt).getTime(),
+    variant.lastClickAt ? new Date(variant.lastClickAt).getTime() : 0,
+    INICIO_REGISTRO.getTime()
+  );
+  return Date.now() - ultima > DIAS_SIN_CLICS * 24 * 3600 * 1000;
+}
 
 /** La IP real del visitante: la de Cloudflare si viene por el worker. */
 function ipDe(request) {
@@ -194,8 +218,8 @@ app.get('/api/get-destination', async (request, response) => {
     include: { influencer: true }
   });
 
-  if (!variant) {
-    // Si no existe en la DB, no hacer redirect - dejar que la página maneje el caso
+  // Apagado, archivado o caducado: igual que si no existiera.
+  if (!variant || !variant.isActive || variant.archivedAt || caducado(variant)) {
     return response.json({ destination: null });
   }
 
@@ -315,7 +339,7 @@ app.get('/:slug', async (request, response) => {
 
   // Apagado o archivado desde el panel = no redirige. Antes solo se miraba
   // que el slug existiera, asi que un enlace retirado seguia funcionando.
-  if (!variant || !variant.isActive || variant.archivedAt) {
+  if (!variant || !variant.isActive || variant.archivedAt || caducado(variant)) {
     return response.status(404).send('Link no encontrado');
   }
 
@@ -327,7 +351,7 @@ app.get('/:slug', async (request, response) => {
   // Paso 2: ya ha confirmado la edad y viene del navegador del telefono.
   if (request.query.go) {
     prisma.linkVariant
-      .update({ where: { id: variant.id }, data: { clickCount: { increment: 1 } } })
+      .update({ where: { id: variant.id }, data: { clickCount: { increment: 1 }, lastClickAt: new Date() } })
       .catch((e) => console.error(`clickCount ${slug}: ${e.message}`));
     registrarClicUnico(request, variant.id);
 

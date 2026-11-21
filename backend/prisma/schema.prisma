@@ -29,6 +29,8 @@ model LinkVariant {
   isActive      Boolean        @default(true)
   archivedAt    DateTime?
   createdBy     String?
+  // El ultimo clic. Con 21 dias sin clics el link caduca (server.js).
+  lastClickAt   DateTime?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   
