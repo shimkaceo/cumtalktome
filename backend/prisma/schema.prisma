@@ -31,6 +31,8 @@ model LinkVariant {
   createdBy     String?
   // El ultimo clic. Con 21 dias sin clics el link caduca (server.js).
   lastClickAt   DateTime?
+  // Destino con nombre (tabla Destino). Null = el urlDestino de su ficha.
+  destinoId     String?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   
@@ -79,6 +81,42 @@ model ClickUnico {
   variant       LinkVariant    @relation(fields: [variantId], references: [id], onDelete: Cascade)
 
   @@unique([variantId, ipHash])
+  @@index([createdAt])
+}
+
+// Destinos con nombre de cada influencer. Las tablas las crea server.js al
+// arrancar; aqui solo se describen igual para que `prisma db push` no las borre.
+model Destino {
+  id            String         @id
+  influencerId  String
+  nombre        String
+  url           String
+  tipo          String         @default("normal")
+  ofLinkId      String?
+  ofCuentaId    String?
+  createdBy     String?
+  archivedAt    DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @default(now())
+
+  @@index([influencerId])
+}
+
+// Una fila por visita al age gate (paso 1) y por paso al destino (paso 2).
+model Visita {
+  id            String         @id
+  variantId     String
+  destinoId     String?
+  paso          Int            @db.SmallInt
+  ipHash        String?
+  pais          String?
+  dispositivo   String?
+  app           String?
+  idioma        String?
+  esBot         Boolean        @default(false)
+  createdAt     DateTime       @default(now())
+
+  @@index([variantId, createdAt])
   @@index([createdAt])
 }
 

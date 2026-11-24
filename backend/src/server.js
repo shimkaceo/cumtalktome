@@ -157,6 +157,117 @@ prisma
   .catch((e) => console.error(`ClickUnico: ${e.message}`));
 
 /**
+ * Destinos con nombre y visitas.
+ *
+ * Destino: cada influencer puede tener varios sitios a los que mandar sus
+ * enlaces ("IG gym", "Free trial 7 dias"...). Un enlace con `destinoId` va a
+ * ese destino; sin el, va al de siempre, el `urlDestino` de su ficha (el
+ * destino por defecto de su red). Asi los enlaces que ya existian no cambian.
+ *
+ * Visita: una fila cada vez que alguien ve el age gate (paso 1) y otra cuando
+ * lo pasa (paso 2). Es lo que permite saber cuanta gente se queda en el age
+ * gate, de que pais llega, con que movil y desde que app. La IP no se guarda:
+ * solo su huella, como en ClickUnico.
+ *
+ * Se crean al arrancar y el servidor no escucha hasta que estan: la consulta
+ * de cada enlace ya pide `destinoId` y fallaria si la columna no existiera.
+ */
+const TABLAS_NUEVAS = [
+  `CREATE TABLE IF NOT EXISTS "Destino" (
+     "id"           TEXT NOT NULL,
+     "influencerId" TEXT NOT NULL,
+     "nombre"       TEXT NOT NULL,
+     "url"          TEXT NOT NULL,
+     "tipo"         TEXT NOT NULL DEFAULT 'normal',
+     "ofLinkId"     TEXT,
+     "ofCuentaId"   TEXT,
+     "createdBy"    TEXT,
+     "archivedAt"   TIMESTAMP(3),
+     "createdAt"    TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     "updatedAt"    TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     CONSTRAINT "Destino_pkey" PRIMARY KEY ("id"),
+     CONSTRAINT "Destino_influencerId_fkey" FOREIGN KEY ("influencerId")
+       REFERENCES "Influencer"("id") ON DELETE CASCADE ON UPDATE CASCADE
+   )`,
+  `CREATE INDEX IF NOT EXISTS "Destino_influencerId_idx" ON "Destino"("influencerId")`,
+  `ALTER TABLE "LinkVariant" ADD COLUMN IF NOT EXISTS "destinoId" TEXT`,
+  `CREATE INDEX IF NOT EXISTS "LinkVariant_destinoId_idx" ON "LinkVariant"("destinoId")`,
+  `CREATE TABLE IF NOT EXISTS "Visita" (
+     "id"          TEXT NOT NULL,
+     "variantId"   TEXT NOT NULL,
+     "destinoId"   TEXT,
+     "paso"        SMALLINT NOT NULL,
+     "ipHash"      TEXT,
+     "pais"        TEXT,
+     "dispositivo" TEXT,
+     "app"         TEXT,
+     "idioma"      TEXT,
+     "esBot"       BOOLEAN NOT NULL DEFAULT false,
+     "createdAt"   TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     CONSTRAINT "Visita_pkey" PRIMARY KEY ("id"),
+     CONSTRAINT "Visita_variantId_fkey" FOREIGN KEY ("variantId")
+       REFERENCES "LinkVariant"("id") ON DELETE CASCADE ON UPDATE CASCADE
+   )`,
+  `CREATE INDEX IF NOT EXISTS "Visita_variantId_createdAt_idx" ON "Visita"("variantId", "createdAt")`,
+  `CREATE INDEX IF NOT EXISTS "Visita_createdAt_idx" ON "Visita"("createdAt")`
+];
+
+async function prepararTablas() {
+  for (const sql of TABLAS_NUEVAS) await prisma.$executeRawUnsafe(sql);
+  console.log('✓ Tablas Destino y Visita listas');
+}
+
+/**
+ * A donde va un enlace: su destino con nombre si lo tiene y sigue vivo; si no,
+ * el de su ficha. Devuelve tambien que destino se uso, para la visita.
+ */
+async function destinoDe(variant) {
+  if (variant.destinoId) {
+    const filas = await prisma.$queryRaw`
+      SELECT "url" FROM "Destino"
+       WHERE "id" = ${variant.destinoId} AND "archivedAt" IS NULL`;
+    const url = filas[0]?.url;
+    if (url && url.startsWith('http')) return { url, destinoId: variant.destinoId };
+  }
+  return { url: variant.influencer.urlDestino, destinoId: null };
+}
+
+/* Lo que se apunta de cada visita: sacado de las cabeceras, nada mas. */
+const UA_BOT = /bot|crawl|spider|preview|facebookexternalhit|facebot|whatsapp|telegram|slack|discord|embedly|curl|wget|python|headless|go-http|okhttp|java\//i;
+
+function dispositivoDe(ua) {
+  if (/iphone|ipad|ipod/i.test(ua)) return 'ios';
+  if (/android/i.test(ua)) return 'android';
+  if (/windows|macintosh|linux|cros/i.test(ua)) return 'ordenador';
+  return 'otro';
+}
+
+/** La app desde la que se abre, si es un navegador interno. */
+function appDe(ua) {
+  if (/instagram/i.test(ua)) return 'instagram';
+  if (/FBAN|FBAV|FB_IAB/i.test(ua)) return 'facebook';
+  if (/reddit/i.test(ua)) return 'reddit';
+  if (/tiktok|musical_ly|bytedance/i.test(ua)) return 'tiktok';
+  if (/snapchat/i.test(ua)) return 'snapchat';
+  if (/twitter/i.test(ua)) return 'x';
+  if (/telegram/i.test(ua)) return 'telegram';
+  return 'navegador';
+}
+
+function registrarVisita(request, variantId, paso, destinoId, idioma) {
+  const ua = request.headers['user-agent'] || '';
+  const ip = ipDe(request);
+  const huella = ip ? createHash('sha256').update(`${SAL_CLICS}:${ip}`).digest('hex') : null;
+  const pais = (request.headers['cf-ipcountry'] || '').slice(0, 2).toUpperCase() || null;
+  prisma
+    .$executeRaw`INSERT INTO "Visita"
+                   ("id", "variantId", "destinoId", "paso", "ipHash", "pais", "dispositivo", "app", "idioma", "esBot", "createdAt")
+                 VALUES (gen_random_uuid()::text, ${variantId}, ${destinoId}, ${paso}, ${huella}, ${pais},
+                         ${dispositivoDe(ua)}, ${appDe(ua)}, ${idioma}, ${!ua || UA_BOT.test(ua)}, now())`
+    .catch((e) => console.error(`Visita ${variantId}: ${e.message}`));
+}
+
+/**
  * Links caducados: los que llevan DIAS_SIN_CLICS dias sin un solo clic dejan de
  * funcionar (quien los abra ve "no encontrado") y Shimka Lab los borra para
  * siempre en su limpieza. Suele ser que la cuenta se cambio o que esa persona
@@ -223,8 +334,8 @@ app.get('/api/get-destination', async (request, response) => {
     return response.json({ destination: null });
   }
 
-  // Enviar al destino real del influencer
-  const destination = variant.influencer.urlDestino;
+  // Enviar al destino del enlace (o al de su ficha si no tiene uno propio)
+  const { url: destination } = await destinoDe(variant);
   response.json({ destination });
 });
 
@@ -343,7 +454,7 @@ app.get('/:slug', async (request, response) => {
     return response.status(404).send('Link no encontrado');
   }
 
-  const destino = variant.influencer.urlDestino;
+  const { url: destino, destinoId } = await destinoDe(variant);
   if (!destino || !destino.startsWith('http')) {
     return response.status(400).json({ error: 'Invalid destination URL' });
   }
@@ -354,6 +465,7 @@ app.get('/:slug', async (request, response) => {
       .update({ where: { id: variant.id }, data: { clickCount: { increment: 1 }, lastClickAt: new Date() } })
       .catch((e) => console.error(`clickCount ${slug}: ${e.message}`));
     registrarClicUnico(request, variant.id);
+    registrarVisita(request, variant.id, 2, destinoId, idioma);
 
     return response
       .header('Content-Type', 'text/html; charset=utf-8')
@@ -362,6 +474,7 @@ app.get('/:slug', async (request, response) => {
   }
 
   // Paso 1: age gate.
+  registrarVisita(request, variant.id, 1, destinoId, idioma);
   return response
     .header('Content-Type', 'text/html; charset=utf-8')
     .header('Cache-Control', 'no-store')
@@ -378,6 +491,8 @@ app.get('/health', (request, response) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT)
+prepararTablas()
+  .catch((e) => console.error(`Tablas nuevas: ${e.message}`))
+  .then(() => app.listen(PORT))
   .then(() => console.log(`✓ Servidor en puerto ${PORT} | Bot detection: OFF | Age gate: ON | JWT: ON`))
   .catch((error) => console.error('Error:', error));
